@@ -77,7 +77,7 @@ int ars_rapd_ip(struct adbuf *dest, struct ars_packet *pkt, int layer)
 	/* TODO: the 'proto' field may not be added if the protocl
 	 * that follows this layer looks as specified. */
 	adbuf_printf(dest, "proto=%u,", ip->protocol);
-	adbuf_printf(dest, "cksum=0x%04x,", ip->check);
+	adbuf_printf(dest, "cksum=0x%04x,", ntohs(ip->check));
 	{
 		unsigned char *x = (unsigned char*) &ip->saddr;
 		adbuf_printf(dest, "saddr=%u.%u.%u.%u,",
@@ -97,9 +97,13 @@ int ars_rapd_ipopt(struct adbuf *dest, struct ars_packet *pkt, int layer)
 	unsigned char *optp = pkt->p_layer[layer].l_data;
 	int optlen, i;
 
-	/* ip options may not be naturally aligned */
-	memcpy(&ipopt, pkt->p_layer[layer].l_data, len);
-	optlen = ipopt.len;
+	/* ip options may not be naturally aligned. The layer can be
+	 * shorter (truncated) or longer than the structure: copy what
+	 * fits, and never trust the option's own length byte beyond
+	 * the bytes really stored in the layer. */
+	memset(&ipopt, 0, sizeof(ipopt));
+	memcpy(&ipopt, optp, MIN((size_t)len, sizeof(ipopt)));
+	optlen = (len >= 2) ? MIN(ipopt.len, len) : len;
 
 	switch(ipopt.kind) {
 	case ARS_IPOPT_EOL:
@@ -125,6 +129,8 @@ int ars_rapd_ipopt(struct adbuf *dest, struct ars_packet *pkt, int layer)
 			while(1) {
 				unsigned char *x;
 
+				/* the 4 bytes at ptr-1 must be inside
+				 * the option */
 				if (ptr > 37 ||
 				    ptr > (optlen-3))
 					break;
@@ -160,9 +166,13 @@ int ars_rapd_ipopt(struct adbuf *dest, struct ars_packet *pkt, int layer)
 			while(1) {
 				unsigned char *x;
 				__u32 ts;
+				int entry = (flags != ARS_IPOPT_TS_TSANDADDR &&
+					     flags != ARS_IPOPT_TS_PRESPEC) ? 4 : 8;
 
+				/* the whole entry at ptr-1 must be
+				 * inside the option */
 				if (ptr > 37 ||
-				    ptr > (optlen-4))
+				    ptr > (optlen-(entry-1)))
 					break;
 				if (flags != ARS_IPOPT_TS_TSANDADDR &&
 				    flags != ARS_IPOPT_TS_PRESPEC) {
@@ -185,8 +195,8 @@ int ars_rapd_ipopt(struct adbuf *dest, struct ars_packet *pkt, int layer)
 		break;
 	default:
 		adbuf_printf(dest, "ip.unknown(hex=");
-		for (i = 0; i < optlen; i++) {
-			adbuf_printf(dest, "0x%02x", optp[i]);
+		for (i = 0; i < len; i++) {
+			adbuf_printf(dest, "%02x", optp[i]);
 		}
 		adbuf_printf(dest, ")+");
 		break;
@@ -282,9 +292,11 @@ int ars_rapd_tcpopt(struct adbuf *dest, struct ars_packet *pkt, int layer)
 	unsigned char *optp = pkt->p_layer[layer].l_data;
 	int optlen, i;
 
-	/* tcp options may not be naturally aligned */
-	memcpy(&tcpopt, pkt->p_layer[layer].l_data, len);
-	optlen = tcpopt.len;
+	/* tcp options may not be naturally aligned. See ars_rapd_ipopt()
+	 * about the layer size vs the option length byte. */
+	memset(&tcpopt, 0, sizeof(tcpopt));
+	memcpy(&tcpopt, optp, MIN((size_t)len, sizeof(tcpopt)));
+	optlen = (len >= 2) ? MIN(tcpopt.len, len) : len;
 
 	switch(tcpopt.kind) {
 	case ARS_TCPOPT_EOL:
@@ -307,7 +319,10 @@ int ars_rapd_tcpopt(struct adbuf *dest, struct ars_packet *pkt, int layer)
 	case ARS_TCPOPT_SACK:
 		adbuf_printf(dest, "tcp.sack(blocks=");
 		{
+			/* at most 4 blocks fit in the 40 bytes of options */
 			int blocks = (optlen-2)/8;
+			if (blocks > 4)
+				blocks = 4;
 			for (i = 0; i < blocks; i++) {
 				u_int32_t s_orig, s_size;
 
@@ -326,7 +341,7 @@ int ars_rapd_tcpopt(struct adbuf *dest, struct ars_packet *pkt, int layer)
 		{
 			__u32 info;
 			memcpy(&info, tcpopt.un.echo.info, 4);
-			adbuf_printf(dest, "tcp.echoreq(info=%lu)+",
+			adbuf_printf(dest, "tcp.echo(info=%lu)+",
 					(unsigned long) ntohl(info));
 		}
 		break;
@@ -343,14 +358,14 @@ int ars_rapd_tcpopt(struct adbuf *dest, struct ars_packet *pkt, int layer)
 			__u32 tsval, tsecr;
 			memcpy(&tsval, tcpopt.un.timestamp.tsval, 4);
 			memcpy(&tsecr, tcpopt.un.timestamp.tsecr, 4);
-			adbuf_printf(dest, "tcp.timestamp(val=%lu,ecr=%lu)+",
+			adbuf_printf(dest, "tcp.ts(val=%lu,ecr=%lu)+",
 				(unsigned long) ntohl(tsval),
 				(unsigned long) ntohl(tsecr));
 		}
 		break;
 	default:
 		adbuf_printf(dest, "tcp.unknown(hex=");
-		for (i = 0; i < optlen; i++) {
+		for (i = 0; i < len; i++) {
 			adbuf_printf(dest, "%02x", optp[i]);
 		}
 		adbuf_printf(dest, ")+");

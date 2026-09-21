@@ -43,12 +43,3 @@ int resolve_addr(struct sockaddr * addr, char *hostname)
 	}
 	return 0;
 }
-
-/* Like resolve_addr but exit on error */
-void resolve(struct sockaddr *addr, char *hostname)
-{
-	if (resolve_addr(addr, hostname) == -1) {
-		fprintf(stderr, "Unable to resolve '%s'\n", hostname);
-		exit(1);
-	}
-}

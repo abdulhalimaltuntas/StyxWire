@@ -410,79 +410,91 @@ size_t ars_packet_size(struct ars_packet *pkt)
 	return ars_relative_size(pkt, 0);
 }
 
-/* from R. Stevens's Network Programming */
+/* Internet checksum (RFC 1071), from R. Stevens's Network Programming.
+ *
+ * The sum is computed over the 16 bit words as they are in memory, so the
+ * returned value is in "memory order" as well: store it with memcpy() (or
+ * assign it to a network order field) without htons(). Words are fetched
+ * with memcpy() so unaligned buffers are fine, and a trailing odd byte is
+ * padded with a zero *after* it without reading past the buffer. */
 u_int16_t ars_cksum(void *vbuf, size_t nbytes)
 {
-	u_int16_t *buf = (u_int16_t*) vbuf;
-	u_int32_t sum;
-	u_int16_t oddbyte;
+	const unsigned char *p = vbuf;
+	u_int32_t sum = 0;
+	u_int16_t w;
 
-	sum = 0;
 	while (nbytes > 1) {
-		sum += *buf++;
+		memcpy(&w, p, 2);
+		sum += w;
+		p += 2;
 		nbytes -= 2;
 	}
 	if (nbytes == 1) {
-		oddbyte = 0;
-		*((u_int16_t *) &oddbyte) = *(u_int16_t *) buf;
-		sum += oddbyte;
+		unsigned char pad[2];
+		pad[0] = *p;
+		pad[1] = 0;
+		memcpy(&w, pad, 2);
+		sum += w;
 	}
 	sum = (sum >> 16) + (sum & 0xffff);
 	sum += (sum >> 16);
 	return (u_int16_t) ~sum;
 }
 
-/* Multiple buffers checksum facility */
+/* Multiple buffers checksum facility: the same as ars_cksum() but the
+ * data can be fed in several (possibly odd sized) chunks. */
 u_int16_t ars_multi_cksum(struct mc_context *c, int op, void *vbuf,
 							size_t nbytes)
 {
-	u_int16_t *buf = (u_int16_t*) vbuf;
+	const unsigned char *p = vbuf;
 	u_int32_t sum;
-	u_int16_t oddbyte;
-	void *tmp;
+	u_int16_t w;
 
 	if (op == ARS_MC_INIT) {
 		c->oddbyte_flag = 0;
+		c->oddbyte = 0;
 		c->old = 0;
 		return -ARS_OK;
 	} else if (op == ARS_MC_UPDATE) {
-		if (c->oddbyte_flag) {
-			u_int8_t *x = (u_int8_t*)&oddbyte;
-			oddbyte = 0;
-			*((u_int16_t *) &oddbyte) = c->oddbyte << 8;
-			*((u_int16_t *) &oddbyte) |= *(u_int16_t *) buf;
-			oddbyte = (x[0] << 8) | x[1]; /* fix endianess */
-			c->old += oddbyte;
+		sum = c->old;
+		if (c->oddbyte_flag && nbytes > 0) {
+			/* pair the byte left over by the previous chunk
+			 * with the first byte of this one */
+			unsigned char pair[2];
+			pair[0] = c->oddbyte;
+			pair[1] = *p;
+			memcpy(&w, pair, 2);
+			sum += w;
+			p++;
 			nbytes--;
 			c->oddbyte_flag = 0;
-			/* We need to stay aligned -- bad slowdown, fix? */
-			tmp = alloca(nbytes);
-			memcpy(tmp, vbuf+1, nbytes);
-			buf = tmp;
 		}
-		sum = c->old;
 		while (nbytes > 1) {
-			sum += *buf++;
+			memcpy(&w, p, 2);
+			sum += w;
+			p += 2;
 			nbytes -= 2;
 		}
-		c->old = sum;
 		if (nbytes == 1) {
-			c->oddbyte = *(u_int16_t*) buf;
-			c->oddbyte_flag++;
+			c->oddbyte = *p;
+			c->oddbyte_flag = 1;
 		}
+		c->old = sum;
 		return -ARS_OK;
 	} else if (op == ARS_MC_FINAL) {
 		sum = c->old;
-		if (c->oddbyte_flag == 1) {
-			oddbyte = 0;
-			*((u_int16_t *) &oddbyte) = c->oddbyte;
-			sum += oddbyte;
+		if (c->oddbyte_flag) {
+			unsigned char pad[2];
+			pad[0] = c->oddbyte;
+			pad[1] = 0;
+			memcpy(&w, pad, 2);
+			sum += w;
 		}
 		sum = (sum >> 16) + (sum & 0xffff);
 		sum += (sum >> 16);
 		return (u_int16_t) ~sum;
 	} else {
-		assert("else reached in ars_multi_cksum()" == "");
+		assert(0 && "else reached in ars_multi_cksum()");
 	}
 	return 0; /* unreached, here to prevent warnings */
 }
@@ -686,7 +698,7 @@ int ars_udptcp_cksum(struct ars_packet *pkt, int layer, u_int16_t *sum)
 	 * makes sense. */
 	while (j > 0 && pkt->p_layer[j].l_type == ARS_TYPE_IPOPT)
 		j--;
-	if (pkt->p_layer[j].l_type != ARS_TYPE_IP) {
+	if (j < 0 || pkt->p_layer[j].l_type != ARS_TYPE_IP) {
 		ars_set_error(pkt, "TCP/UDP checksum requested, but IP header "
 				    "not found");
 		return -ARS_INVALID;
@@ -776,6 +788,9 @@ int ars_compiler_tcpopt(struct ars_packet *pkt, int layer)
 			return -ARS_NOMEM;
 		}
 		memset(t+cur_size, ARS_TCPOPT_NOP, padding);
+		/* the realloc()ed block replaces the old one (the IP option
+		 * padding had the same bug, see lib/regtest/rt0.htcl) */
+		pkt->p_layer[layer].l_data = t;
 		pkt->p_layer[layer].l_size += padding;
 	}
 	return -ARS_OK;
@@ -906,17 +921,17 @@ int ars_build_packet(struct ars_packet *pkt, unsigned char **packet, size_t *siz
  * system isn't FreeBSD or NetBSD. */
 int ars_bsd_fix(struct ars_packet *pkt, unsigned char *packet, size_t size)
 {
-	struct ars_iphdr *ip;
-
 	if (pkt->p_layer[0].l_type != ARS_TYPE_IP ||
 	    size < sizeof(struct ars_iphdr)) {
 		ars_set_error(pkt, "BSD fix requested, but layer 0 not IP");
 		return -ARS_INVALID;
 	}
-	ip = (struct ars_iphdr*) packet;
 #if defined OSTYPE_DARWIN || defined OSTYPE_FREEBSD || defined OSTYPE_NETBSD || defined OSTYPE_BSDI
-	ip->tot_len = ntohs(ip->tot_len);
-	ip->frag_off = ntohs(ip->frag_off);
+	{
+		struct ars_iphdr *ip = (struct ars_iphdr*) packet;
+		ip->tot_len = ntohs(ip->tot_len);
+		ip->frag_off = ntohs(ip->frag_off);
+	}
 #endif
 	return -ARS_OK;
 }

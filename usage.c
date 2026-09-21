@@ -21,8 +21,8 @@ void	show_usage(void)
 "  -v  --version   show version\n"
 "  -c  --count     packet count\n"
 "  -i  --interval  wait (uX for X microseconds, for example -i u1000)\n"
-"      --fast      alias for -i u10000 (10 packets for second)\n"
-"      --faster    alias for -i u1000 (100 packets for second)\n"
+"      --fast      alias for -i u100000 (10 packets for second)\n"
+"      --faster    alias for -i u1 (as fast as the timer allows)\n"
 "      --flood	   sent packets as fast as possible. Don't show replies.\n"
 "  -n  --numeric   numeric output\n"
 "  -q  --quiet     quiet\n"
@@ -70,7 +70,7 @@ void	show_usage(void)
 "  -s  --baseport   base source port             (default random)\n"
 "  -p  --destport   [+][+]<port> destination port(default 0) ctrl+z inc/dec\n"
 "  -k  --keep       keep still source port\n"
-"  -w  --win        winsize (default 64)\n"
+"  -w  --win        winsize (default 512)\n"
 "  -O  --tcpoff     set fake tcp data offset     (instead of tcphdrlen / 4)\n"
 "  -Q  --seqnum     shows only tcp sequence number\n"
 "  -b  --badcksum   (try to) send packets with a bad IP checksum\n"
@@ -108,8 +108,7 @@ void	show_usage(void)
 "ARS packet description (new, unstable)\n"
 "  --apd-send       Send the packet described with APD (see docs/APD.txt)\n"
 	);
-	exit(0);
-};
+}
 
 void tos_help(void)
 {
@@ -122,7 +121,6 @@ void tos_help(void)
 "       Maximum Reliability           04               snmp\n"
 "       Minimum Cost                  02               nntp\n"
 	);
-	exit(0);
 }
 
 void icmp_help(void)
@@ -141,7 +139,6 @@ void icmp_help(void)
 "  --icmp-dstport   set tcp/udp destination port ( default random )\n"
 "  --icmp-cksum     set icmp checksum            ( default the right cksum)\n"
 	);
-	exit(0);
 }
 
 void route_help(void)

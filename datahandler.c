@@ -15,27 +15,27 @@
 #include "hping2.h"
 #include "globals.h"
 
-void data_handler(char *data, int data_size)
+void data_handler(char *data, int size)
 {
-	if (opt_listenmode) { /* send an HCMP */
-		memcpy(data, rsign, signlen); /* ok, write own reverse sign */
-		data+=signlen;
-		data_size-=signlen;
-		memcpy(data, hcmphdr_p, data_size);
+	if (cfg.opt_listenmode) { /* send an HCMP */
+		memcpy(data, ctx.rsign, cfg.signlen); /* ok, write own reverse sign */
+		data+=cfg.signlen;
+		size-=cfg.signlen;
+		memcpy(data, ctx.hcmphdr_p, size);
 		return; /* done */
 	}
 
-	if (opt_sign) {
-		memcpy(data, sign, signlen); /* lenght pre-checked */
-		data+=signlen;
-		data_size-=signlen;
+	if (cfg.opt_sign) {
+		memcpy(data, cfg.sign, cfg.signlen); /* lenght pre-checked */
+		data+=cfg.signlen;
+		size-=cfg.signlen;
 	}
 
-	if (data_size == 0)
+	if (size == 0)
 		return; /* there is not space left */
 
-	if (opt_datafromfile)
-		datafiller(data, data_size);
+	if (cfg.opt_datafromfile)
+		datafiller(data, size);
 	else
-		memset(data, 'X', data_size);
+		memset(data, 'X', size);
 }

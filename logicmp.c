@@ -26,7 +26,7 @@ void log_icmp_timeexc(char *src_addr, unsigned short icmp_code)
 		printf("TTL 0 during reassembly from ip=%s", src_addr);
 		break;
 	}
-	if (opt_gethost) {
+	if (cfg.opt_gethost) {
 		char *hostn;
 
 		fflush(stdout);
@@ -63,7 +63,7 @@ void log_icmp_unreach(char *src_addr, unsigned short icmp_code)
 		printf("ICMP Unreachable type=%d from ip=%s",
 			icmp_code, src_addr);
 
-	if (opt_gethost) {
+	if (cfg.opt_gethost) {
 		char *hostn;
 
 		fflush(stdout);

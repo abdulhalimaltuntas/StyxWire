@@ -9,6 +9,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
+#include <limits.h>
 #include <sys/time.h>
 #include <ctype.h>
 #include <sys/socket.h>
@@ -142,13 +144,78 @@ static int suidtester(void)
 	return (getuid() != geteuid());
 }
 
-void fail_parse_route(void)
+/* Numeric option arguments.
+ *
+ * Every value is parsed with strtol()/strtoul() semantics (decimal, 0x
+ * hex, 0 octal), must be entirely consumed and must fit the range given
+ * by the caller, which is the width of the protocol field the value ends
+ * up in. A bad value is a usage error: a diagnostic naming the option,
+ * the value and the accepted range is printed and hping exits with 1. */
+/* Set by bad_number(): parse_options() checks it after every option and
+ * returns HPING_PARSE_ERROR (the diagnostic was already printed). */
+static int parse_failed = 0;
+
+static void bad_number(const char *opt, const char *s, const char *why,
+		       long long min, unsigned long long max)
 {
-    fprintf(stderr, "RECTUM\n");
-    exit(1);
+	fprintf(stderr, "hping: option %s: invalid value '%s' (%s; "
+		"expected a number in the range %lld..%llu)\n",
+		opt, s, why, min, max);
+	parse_failed = 1;
 }
 
-void parse_route(unsigned char *route, unsigned int *route_len, char *str)
+static long opt_num(const char *opt, const char *s, long min, long max)
+{
+	char *end;
+	long v;
+
+	if (s == NULL || *s == '\0') {
+		bad_number(opt, s ? s : "", "empty", min, max);
+		return min;
+	}
+	errno = 0;
+	v = strtol(s, &end, 0);
+	if (end == s || *end != '\0') {
+		bad_number(opt, s, "not a number", min, max);
+		return min;
+	}
+	if (errno == ERANGE || v < min || v > max) {
+		bad_number(opt, s, "out of range", min, max);
+		return min;
+	}
+	return v;
+}
+
+static unsigned long opt_unum(const char *opt, const char *s,
+			      unsigned long max)
+{
+	char *end;
+	unsigned long v;
+
+	if (s == NULL || *s == '\0') {
+		bad_number(opt, s ? s : "", "empty", 0, max);
+		return 0;
+	}
+	if (*s == '-') {
+		bad_number(opt, s, "negative", 0, max);
+		return 0;
+	}
+	errno = 0;
+	v = strtoul(s, &end, 0);
+	if (end == s || *end != '\0') {
+		bad_number(opt, s, "not a number", 0, max);
+		return 0;
+	}
+	if (errno == ERANGE || v > max) {
+		bad_number(opt, s, "out of range", 0, max);
+		return 0;
+	}
+	return v;
+}
+
+/* Parse a --lsrr/--ssrr route ("[ptr:]IP1[/IP2...]") into the IP option
+ * buffer 'route'. Returns 0, or -1 on a syntax error (message printed). */
+int parse_route(unsigned char *route, unsigned int *route_len, const char *arg)
 {
     struct in_addr ip;
     unsigned int i = 0;
@@ -156,7 +223,13 @@ void parse_route(unsigned char *route, unsigned int *route_len, char *str)
     unsigned int n = 0;
     unsigned int route_ptr = 256;
     char c;
+    char str[1024]; /* tokenised in place: work on a copy of the argument */
 
+    if (strlen(arg) >= sizeof(str)) {
+        fprintf(stderr, "hping: route too long\n");
+        return -1;
+    }
+    strcpy(str, arg);
     route += 3;
     while (str[i] != '\0')
     {
@@ -167,8 +240,8 @@ void parse_route(unsigned char *route, unsigned int *route_len, char *str)
             case '/':
                 if (n >= 62)
                 {
-                    fprintf(stderr, "too long route\n");
-                    fail_parse_route();
+                    fprintf(stderr, "hping: too long route\n");
+                    return -1;
                 }
                 str[j] = '\0';
                 if (inet_aton(str+i, &ip))
@@ -179,8 +252,8 @@ void parse_route(unsigned char *route, unsigned int *route_len, char *str)
                         str[j++] = '/';
                     break;
                 }
-                fprintf(stderr, "invalid IP adress in route\n");
-                fail_parse_route();
+                fprintf(stderr, "hping: invalid IP address in route: '%s'\n", str+i);
+                return -1;
             case ':':
                 if ((!i) && j && j < 4)
                 {
@@ -192,7 +265,8 @@ void parse_route(unsigned char *route, unsigned int *route_len, char *str)
                     }
                 }
             default:
-                fail_parse_route();
+                fprintf(stderr, "hping: invalid route syntax (try --route-help)\n");
+                return -1;
         }
         i = j;
     }
@@ -202,16 +276,30 @@ void parse_route(unsigned char *route, unsigned int *route_len, char *str)
         route[-1] = (unsigned char) route_ptr;
     *route_len = 4*n + 3;
     route[-2] = (unsigned char) *route_len;
+    return 0;
 }
 
+/* Fill cfg from the command line.
+ *
+ * Returns HPING_PARSE_OK, HPING_PARSE_DONE when the command line only
+ * asked for a help/version text (already printed: exit 0), or
+ * HPING_PARSE_ERROR after printing a diagnostic on stderr (exit 1).
+ * Nothing is sent and no socket is opened here; --apd-send is stored in
+ * cfg.apd_send for main() to run. Callable more than once (tests). */
 int parse_options(int argc, char **argv)
 {
 	int src_ttl_set = 0;
 	int targethost_set = 0;
 	int o;
 
-	if (argc < 2)
-		return -1;
+	parse_failed = 0;
+	delay_changed = 0;
+	antigetopt(0, NULL, NULL); /* reset the parser state */
+	if (argc < 2) {
+		fprintf(stderr, "hping: missing host argument\n"
+			"Try `hping --help' for more information.\n");
+		return HPING_PARSE_ERROR;
+	}
 
 	ago_set_exception(0, suidtester, "Option disabled when setuid");
 
@@ -222,471 +310,521 @@ int parse_options(int argc, char **argv)
 		case AGO_AMBIG:
 			ago_gnu_error("hping", o);
 			fprintf(stderr, "Try hping --help\n");
-			exit(1);
+			return HPING_PARSE_ERROR;
 		case AGO_ALONE:
 			if (targethost_set == 1) {
 				fprintf(stderr, "hping: you must specify only "
 						"one target host at a time\n");
-				exit(1);
+				return HPING_PARSE_ERROR;
 			} else {
-				strlcpy(targetname, ago_optarg, 1024);
+				strlcpy(cfg.targetname, ago_optarg, 1024);
 				targethost_set = 1;
 			}
 			break;
 		case OPT_COUNT:
-			count = strtol(ago_optarg, NULL, 0);
+			cfg.count = opt_num("-c/--count", ago_optarg, 1, INT_MAX);
 			break;
 		case OPT_INTERVAL:
 			delay_changed = 1;
 			if (*ago_optarg == 'u') {
-				opt_waitinusec = TRUE;
-				usec_delay.it_value.tv_sec =
-				usec_delay.it_interval.tv_sec = 0;
-				usec_delay.it_value.tv_usec = 
-				usec_delay.it_interval.tv_usec =
-					atol(ago_optarg+1);
+				cfg.opt_waitinusec = TRUE;
+				cfg.usec_delay.it_value.tv_sec =
+				cfg.usec_delay.it_interval.tv_sec = 0;
+				cfg.usec_delay.it_value.tv_usec = 
+				cfg.usec_delay.it_interval.tv_usec =
+					opt_num("-i/--interval", ago_optarg+1,
+						0, 999999999L);
 			}
 			else
-				sending_wait = strtol(ago_optarg, NULL, 0);
+				cfg.sending_wait = opt_num("-i/--interval",
+						ago_optarg, 0, INT_MAX);
 			break;
 		case OPT_NUMERIC:
-			opt_numeric = TRUE;
+			cfg.opt_numeric = TRUE;
 			break;
 		case OPT_QUIET:
-			opt_quiet = TRUE;
+			cfg.opt_quiet = TRUE;
 			break;
 		case OPT_INTERFACE:
-			strlcpy (ifname, ago_optarg, 1024);
+			strlcpy (cfg.ifname, ago_optarg, 1024);
 			break;
 		case OPT_HELP:
 			show_usage();
-			break;
+			return HPING_PARSE_DONE;
 		case OPT_VERSION:
 			show_version();
-			break;
+			return HPING_PARSE_DONE;
 		case OPT_DESTPORT:
 			if (*ago_optarg == '+')
 			{
-				opt_incdport = TRUE;
+				cfg.opt_incdport = TRUE;
 				ago_optarg++;
 			}
 			if (*ago_optarg == '+')
 			{
-				opt_force_incdport = TRUE;
+				cfg.opt_force_incdport = TRUE;
 				ago_optarg++;
 			}
-			base_dst_port = dst_port = strtol(ago_optarg, NULL, 0);
+			cfg.base_dst_port = cfg.dst_port = opt_num("-p/--destport", ago_optarg, 0, 65535);
 			break;
 		case OPT_BASEPORT:
-			initsport = strtol(ago_optarg, NULL, 0);
+			cfg.initsport = opt_num("-s/--baseport", ago_optarg, 0, 65535);
 			break;
 		case OPT_TTL:
-			src_ttl = strtol(ago_optarg, NULL, 0);
+			cfg.src_ttl = opt_num("-t/--ttl", ago_optarg, 0, 255);
 			src_ttl_set = 1;
 			break;
 		case OPT_ID:
-			src_id = strtol(ago_optarg, NULL, 0);
+			cfg.src_id = opt_num("-N/--id", ago_optarg, 0, 65535);
 			break;
 		case OPT_WIN:
-			src_winsize = strtol(ago_optarg, NULL, 0);
+			cfg.src_winsize = opt_num("-w/--win", ago_optarg, 0, 65535);
 			break;
 		case OPT_SPOOF:
-			strlcpy (spoofaddr, ago_optarg, 1024);
+			strlcpy (cfg.spoofaddr, ago_optarg, 1024);
 			break;
 		case OPT_FIN:
-			tcp_th_flags |= TH_FIN;
+			cfg.tcp_th_flags |= TH_FIN;
 			break;
 		case OPT_SYN:
-			tcp_th_flags |= TH_SYN;
+			cfg.tcp_th_flags |= TH_SYN;
 			break;
 		case OPT_RST:
-			tcp_th_flags |= TH_RST;
+			cfg.tcp_th_flags |= TH_RST;
 			break;
 		case OPT_PUSH:
-			tcp_th_flags |= TH_PUSH;
+			cfg.tcp_th_flags |= TH_PUSH;
 			break;
 		case OPT_ACK:
-			tcp_th_flags |= TH_ACK;
+			cfg.tcp_th_flags |= TH_ACK;
 			break;
 		case OPT_URG:
-			tcp_th_flags |= TH_URG;
+			cfg.tcp_th_flags |= TH_URG;
 			break;
 		case OPT_XMAS:
-			tcp_th_flags |= TH_X;
+			cfg.tcp_th_flags |= TH_X;
 			break;
 		case OPT_YMAS:
-			tcp_th_flags |= TH_Y;
+			cfg.tcp_th_flags |= TH_Y;
 			break;
 		case OPT_FRAG:
-			opt_fragment = TRUE;
+			cfg.opt_fragment = TRUE;
 			break;
 		case OPT_MOREFRAG:
-			opt_mf = TRUE;
+			cfg.opt_mf = TRUE;
 			break;
 		case OPT_DONTFRAG:
-			opt_df = TRUE;
+			cfg.opt_df = TRUE;
 			break;
 		case OPT_FRAGOFF:
-			ip_frag_offset = strtol(ago_optarg, NULL, 0);
+			cfg.ip_frag_offset = opt_num("-g/--fragoff", ago_optarg, 0, 65535);
 			break;
 		case OPT_TCPOFF:
-			src_thoff = strtol(ago_optarg, NULL, 0);
+			cfg.src_thoff = opt_num("-O/--tcpoff", ago_optarg, 0, 15);
 			break;
 		case OPT_REL:
-			opt_relid = TRUE;
+			cfg.opt_relid = TRUE;
 			break;
 		case OPT_DATA:
-			data_size = strtol(ago_optarg, NULL, 0);
+			cfg.data_size = opt_num("-d/--data", ago_optarg, 0, 65535);
 			break;
 		case OPT_RAWIP:
-			opt_rawipmode = TRUE;
+			cfg.opt_rawipmode = TRUE;
 			break;
 		case OPT_ICMP:
-			opt_icmpmode = TRUE;
+			cfg.opt_icmpmode = TRUE;
 			break;
 		case OPT_ICMP_TS:
-			opt_icmpmode = TRUE;
-			opt_icmptype = 13;
+			cfg.opt_icmpmode = TRUE;
+			cfg.opt_icmptype = 13;
 			break;
 		case OPT_ICMP_ADDR:
-			opt_icmpmode = TRUE;
-			opt_icmptype = 17;
+			cfg.opt_icmpmode = TRUE;
+			cfg.opt_icmptype = 17;
 			break;
 		case OPT_UDP:
-			opt_udpmode = TRUE;
+			cfg.opt_udpmode = TRUE;
 			break;
 		case OPT_SCAN:
-			opt_scanmode = TRUE;
-			opt_scanports = strdup(ago_optarg);
+			cfg.opt_scanmode = TRUE;
+			if (cfg.opt_scanports != NULL && cfg.opt_scanports[0] != '\0')
+				free(cfg.opt_scanports);
+			cfg.opt_scanports = strdup(ago_optarg);
+			if (cfg.opt_scanports == NULL) {
+				fprintf(stderr, "hping: out of memory\n");
+				return HPING_PARSE_ERROR;
+			}
 			break;
 		case OPT_LISTEN:
-			opt_listenmode = TRUE;
-			strlcpy(sign, ago_optarg, 1024);
-			signlen = strlen(ago_optarg);
+			cfg.opt_listenmode = TRUE;
+			strlcpy(cfg.sign, ago_optarg, 1024);
+			cfg.signlen = strlen(ago_optarg);
 			break;
 		case OPT_IPPROTO:
-			raw_ip_protocol = strtol(ago_optarg, NULL, 0);
+			cfg.raw_ip_protocol = opt_num("-H/--ipproto", ago_optarg, 0, 255);
 			break;
 		case OPT_ICMPTYPE:
-			opt_icmpmode= TRUE;
-			opt_icmptype = strtol(ago_optarg, NULL, 0);
+			cfg.opt_icmpmode= TRUE;
+			cfg.opt_icmptype = opt_num("-C/--icmptype", ago_optarg, 0, 255);
 			break;
 		case OPT_ICMPCODE:
-			opt_icmpmode= TRUE;
-			opt_icmpcode = strtol(ago_optarg, NULL, 0);
+			cfg.opt_icmpmode= TRUE;
+			cfg.opt_icmpcode = opt_num("-K/--icmpcode", ago_optarg, 0, 255);
 			break;
 		case OPT_BIND:
-			ctrlzbind = BIND_TTL;
+			cfg.ctrlzbind = BIND_TTL;
 			break;
 		case OPT_UNBIND:
-			ctrlzbind = BIND_NONE;
+			cfg.ctrlzbind = BIND_NONE;
 			break;
 		case OPT_DEBUG:
-			opt_debug = TRUE;
+			cfg.opt_debug = TRUE;
 			break;
 		case OPT_VERBOSE:
-			opt_verbose = TRUE;
+			cfg.opt_verbose = TRUE;
 			break;
 		case OPT_WINID:
-			opt_winid_order = TRUE;
+			cfg.opt_winid_order = TRUE;
 			break;
 		case OPT_KEEP:
-			opt_keepstill = TRUE;
+			cfg.opt_keepstill = TRUE;
 			break;
 		case OPT_FILE:
-			opt_datafromfile = TRUE;
-			strlcpy(datafilename, ago_optarg, 1024);
+			cfg.opt_datafromfile = TRUE;
+			strlcpy(cfg.datafilename, ago_optarg, 1024);
 			break;
 		case OPT_DUMP:
-			opt_hexdump = TRUE;
+			cfg.opt_hexdump = TRUE;
 			break;
 		case OPT_PRINT:
-			opt_contdump = TRUE;
+			cfg.opt_contdump = TRUE;
 			break;
 		case OPT_SIGN:
-			opt_sign = TRUE;
-			strlcpy(sign, ago_optarg, 1024);
-			signlen = strlen(ago_optarg);
+			cfg.opt_sign = TRUE;
+			strlcpy(cfg.sign, ago_optarg, 1024);
+			cfg.signlen = strlen(ago_optarg);
 			break;
 		case OPT_SAFE:
-			opt_safe = TRUE;
+			cfg.opt_safe = TRUE;
 			break;
 		case OPT_END:
-			opt_end = TRUE;
+			cfg.opt_end = TRUE;
 			break;
 		case OPT_TRACEROUTE:
-			opt_traceroute = TRUE;
+			cfg.opt_traceroute = TRUE;
 			break;
 		case OPT_TOS:
-			if (!strcmp(ago_optarg, "help"))
+			if (!strcmp(ago_optarg, "help")) {
 				tos_help();
+				return HPING_PARSE_DONE;
+			}
 			else
 			{
-				static unsigned int tos_tmp = 0;
+				/* TOS is given as hex digits (see --tos help) */
+				char *end;
+				unsigned long tos_tmp;
 
-				sscanf(ago_optarg, "%2x", &tos_tmp);
-				ip_tos |= tos_tmp; /* OR tos */
+				errno = 0;
+				tos_tmp = strtoul(ago_optarg, &end, 16);
+				if (*ago_optarg == '\0' || *ago_optarg == '-' ||
+				    end == ago_optarg || *end != '\0' ||
+				    errno == ERANGE || tos_tmp > 0xff) {
+					fprintf(stderr, "hping: option -o/--tos: "
+						"invalid value '%s' (expected two "
+						"hex digits, try --tos help)\n",
+						ago_optarg);
+					return HPING_PARSE_ERROR;
+				}
+				cfg.ip_tos |= tos_tmp; /* OR tos */
 			}
 			break;
 		case OPT_MTU:
-			virtual_mtu = strtol(ago_optarg, NULL, 0);
-			opt_fragment = TRUE;
-			if(virtual_mtu > 65535) {
-				virtual_mtu = 65535;
-				printf("Specified MTU too high, "
-					"fixed to 65535.\n");
-			}
+			cfg.virtual_mtu = opt_num("-m/--mtu", ago_optarg, 1, 65535);
+			cfg.opt_fragment = TRUE;
 			break;
 		case OPT_SEQNUM:
-			opt_seqnum = TRUE;
+			cfg.opt_seqnum = TRUE;
 			break;
 		case OPT_BADCKSUM:
-			opt_badcksum = TRUE;
+			cfg.opt_badcksum = TRUE;
 			break;
 		case OPT_SETSEQ:
-			set_seqnum = TRUE;
-			tcp_seqnum = strtoul(ago_optarg, NULL, 0);
+			cfg.set_seqnum = TRUE;
+			cfg.tcp_seqnum = opt_unum("-M/--setseq", ago_optarg, 4294967295UL);
 			break;
 		case OPT_SETACK:
-			set_ack = TRUE;
-			tcp_ack = strtoul(ago_optarg, NULL, 0);
+			cfg.set_ack = TRUE;
+			cfg.tcp_ack = opt_unum("-L/--setack", ago_optarg, 4294967295UL);
 			break;
 		case OPT_RROUTE:
-			opt_rroute = TRUE;
+			cfg.opt_rroute = TRUE;
 			break;
 		case OPT_ICMP_HELP:
 			icmp_help();	/* ICMP options help */
-			break;
+			return HPING_PARSE_DONE;
 		case OPT_ICMP_IPVER:
-			icmp_ip_version = strtol(ago_optarg, NULL, 0);
+			cfg.icmp_ip_version = opt_num("--icmp-ipver", ago_optarg, 0, 15);
 			break;
 		case OPT_ICMP_IPHLEN:
-			icmp_ip_ihl = strtol(ago_optarg, NULL, 0);
+			cfg.icmp_ip_ihl = opt_num("--icmp-iphlen", ago_optarg, 0, 15);
 			break;
 		case OPT_ICMP_IPLEN:
-			icmp_ip_tot_len = strtol(ago_optarg, NULL, 0);
+			cfg.icmp_ip_tot_len = opt_num("--icmp-iplen", ago_optarg, 0, 65535);
 			break;
 		case OPT_ICMP_IPID:
-			icmp_ip_id = strtol(ago_optarg, NULL, 0);
+			cfg.icmp_ip_id = opt_num("--icmp-ipid", ago_optarg, 0, 65535);
 			break;
 		case OPT_ICMP_IPPROTO:
-			icmp_ip_protocol = strtol(ago_optarg, NULL, 0);
+			cfg.icmp_ip_protocol = opt_num("--icmp-ipproto", ago_optarg, 0, 255);
 			break;
 		case OPT_ICMP_IPSRC:
-			strlcpy (icmp_ip_srcip, ago_optarg, 1024);
+			strlcpy (cfg.icmp_ip_srcip, ago_optarg, 1024);
 			break;
 		case OPT_ICMP_IPDST:
-			strlcpy (icmp_ip_dstip, ago_optarg, 1024);
+			strlcpy (cfg.icmp_ip_dstip, ago_optarg, 1024);
 			break;
 		case OPT_ICMP_GW:
-			strlcpy (icmp_gwip, ago_optarg, 1024);
+			strlcpy (cfg.icmp_gwip, ago_optarg, 1024);
 			break;
 		case OPT_ICMP_SRCPORT:
-			icmp_ip_srcport = strtol(ago_optarg, NULL, 0);
+			cfg.icmp_ip_srcport = opt_num("--icmp-srcport", ago_optarg, 0, 65535);
 			break;
 		case OPT_ICMP_DSTPORT:
-			icmp_ip_dstport = strtol(ago_optarg, NULL, 0);
+			cfg.icmp_ip_dstport = opt_num("--icmp-dstport", ago_optarg, 0, 65535);
 			break;
 		case OPT_FORCE_ICMP:
-			opt_force_icmp = TRUE;
+			cfg.opt_force_icmp = TRUE;
 			break;
 		case OPT_ICMP_CKSUM:
-			icmp_cksum = strtol(ago_optarg, NULL, 0);
+			cfg.icmp_cksum = opt_num("--icmp-cksum", ago_optarg, -1, 65535);
 			break;
 		case OPT_TCPEXITCODE:
-			opt_tcpexitcode = TRUE;
+			cfg.opt_tcpexitcode = TRUE;
 			break;
 		case OPT_FAST:
 			delay_changed = 1;
-			opt_waitinusec = TRUE;
-			usec_delay.it_value.tv_sec =
-			usec_delay.it_interval.tv_sec = 0;
-			usec_delay.it_value.tv_usec = 
-			usec_delay.it_interval.tv_usec = 100000;
+			cfg.opt_waitinusec = TRUE;
+			cfg.usec_delay.it_value.tv_sec =
+			cfg.usec_delay.it_interval.tv_sec = 0;
+			cfg.usec_delay.it_value.tv_usec = 
+			cfg.usec_delay.it_interval.tv_usec = 100000;
 			break;
 		case OPT_FASTER:
 			delay_changed = 1;
-			opt_waitinusec = TRUE;
-			usec_delay.it_value.tv_sec =
-			usec_delay.it_interval.tv_sec = 0;
-			usec_delay.it_value.tv_usec = 
-			usec_delay.it_interval.tv_usec = 1;
+			cfg.opt_waitinusec = TRUE;
+			cfg.usec_delay.it_value.tv_sec =
+			cfg.usec_delay.it_interval.tv_sec = 0;
+			cfg.usec_delay.it_value.tv_usec = 
+			cfg.usec_delay.it_interval.tv_usec = 1;
+			break;
 		case OPT_TR_KEEP_TTL:
-			opt_tr_keep_ttl = TRUE;
+			cfg.opt_tr_keep_ttl = TRUE;
 			break;
 		case OPT_TCP_TIMESTAMP:
-			opt_tcp_timestamp = TRUE;
+			cfg.opt_tcp_timestamp = TRUE;
 			break;
 		case OPT_TR_STOP:
-			opt_tr_stop = TRUE;
+			cfg.opt_tr_stop = TRUE;
 			break;
 		case OPT_TR_NO_RTT:
-			opt_tr_no_rtt = TRUE;
+			cfg.opt_tr_no_rtt = TRUE;
 			break;
 		case OPT_RAND_DEST:
-			opt_rand_dest = TRUE;
+			cfg.opt_rand_dest = TRUE;
 			break;
 		case OPT_RAND_SOURCE:
-			opt_rand_source = TRUE;
+			cfg.opt_rand_source = TRUE;
 			break;
 		case OPT_LSRR:
-			opt_lsrr = TRUE;
-			parse_route(lsr, &lsr_length, ago_optarg);
-			if (lsr[0])
+			cfg.opt_lsrr = TRUE;
+			if (parse_route(cfg.lsr, &cfg.lsr_length, ago_optarg) == -1)
+				return HPING_PARSE_ERROR;
+			if (cfg.lsr[0])
 				printf("Warning: erasing previously given "
 						"loose source route");
-			lsr[0] = 131;
+			cfg.lsr[0] = 131;
 			break;
 		case OPT_SSRR:
-			opt_ssrr = TRUE;
-			parse_route(ssr, &ssr_length, ago_optarg);
-			if (ssr[0])
+			cfg.opt_ssrr = TRUE;
+			if (parse_route(cfg.ssr, &cfg.ssr_length, ago_optarg) == -1)
+				return HPING_PARSE_ERROR;
+			if (cfg.ssr[0])
 				printf("Warning: erasing previously given "
 						"strong source route");
-			ssr[0] = 137;
+			cfg.ssr[0] = 137;
 			break;
 		case OPT_ROUTE_HELP:
 			route_help();
-			break;
+			return HPING_PARSE_DONE;
 		case OPT_APD_SEND:
-			hping_ars_send(ago_optarg);
+			/* deferred to main(): nothing is sent while parsing */
+			free(cfg.apd_send);
+			cfg.apd_send = strdup(ago_optarg);
+			if (cfg.apd_send == NULL) {
+				fprintf(stderr, "hping: out of memory\n");
+				return HPING_PARSE_ERROR;
+			}
 			break;
 		case OPT_BEEP:
-			opt_beep = TRUE;
+			cfg.opt_beep = TRUE;
 			break;
 		case OPT_FLOOD:
-			opt_flood = TRUE;
+			cfg.opt_flood = TRUE;
 			break;
                 case OPT_CLOCK_SKEW:
-			opt_tcp_timestamp = TRUE;
-                        opt_clock_skew = TRUE;
+			cfg.opt_tcp_timestamp = TRUE;
+                        cfg.opt_clock_skew = TRUE;
                         break;
                 case OPT_CS_WINDOW:
-                        cs_window = strtol(ago_optarg, NULL, 0);
-                        if (cs_window < 30) {
+                        cfg.cs_window = opt_num("--clock-skew-win", ago_optarg, 30, INT_MAX);
+                        if (cfg.cs_window < 30) {
                             fprintf(stderr,
                                     "clock skew window can't be < 30 sec.\n");
-                            exit(1);
+                            return HPING_PARSE_ERROR;
                         }
                         break;
                 case OPT_CS_WINDOW_SHIFT:
-                        cs_window_shift = strtol(ago_optarg, NULL, 0);
-                        if (cs_window_shift < 1) {
+                        cfg.cs_window_shift = opt_num("--clock-skew-win-shift", ago_optarg, 1, INT_MAX);
+                        if (cfg.cs_window_shift < 1) {
                             fprintf(stderr,
                                     "clock skew window shift can't be < 1\n");
-                            exit(1);
+                            return HPING_PARSE_ERROR;
                         }
                         break;
                 case OPT_CS_VECTOR_LEN:
-                        cs_vector_len = strtol(ago_optarg, NULL, 0);
-                        if (cs_vector_len < 1) {
+                        cfg.cs_vector_len = opt_num("--clock-skew-packets-per-sample", ago_optarg, 1, INT_MAX);
+                        if (cfg.cs_vector_len < 1) {
                             fprintf(stderr,
                                     "clock skew packets per sample can't be < 1\n");
-                            exit(1);
+                            return HPING_PARSE_ERROR;
                         }
                         break;
 		}
+		if (parse_failed)
+			return HPING_PARSE_ERROR;
 	}
 
 	/* missing target host? */
-	if (targethost_set == 0 && opt_listenmode && opt_safe)
+	if (targethost_set == 0 && cfg.opt_listenmode && cfg.opt_safe)
 	{
-		printf(
+		fprintf(stderr,
 		"you must specify a target host if you require safe protocol\n"
 		"because hping needs a target for HCMP packets\n");
-		exit(1);
+		return HPING_PARSE_ERROR;
 	}
 
-	if (targethost_set == 0 && !opt_listenmode) return -1;
+	if (targethost_set == 0 && !cfg.opt_listenmode && cfg.apd_send == NULL) {
+		fprintf(stderr, "hping: missing host argument\n"
+			"Try `hping --help' for more information.\n");
+		return HPING_PARSE_ERROR;
+	}
 
-	if (opt_numeric == TRUE) opt_gethost = FALSE;
+	if (cfg.opt_numeric == TRUE) cfg.opt_gethost = FALSE;
 
 	/* some error condition */
-	if (data_size+IPHDR_SIZE+TCPHDR_SIZE > 65535) {
-		printf("Option error: sorry, data size must be <= %lu\n",
+	if (cfg.data_size+IPHDR_SIZE+TCPHDR_SIZE > 65535) {
+		fprintf(stderr, "Option error: sorry, data size must be <= %lu\n",
 			(unsigned long)(65535-IPHDR_SIZE+TCPHDR_SIZE));
-		exit(1);
+		return HPING_PARSE_ERROR;
 	}
-	else if (count <= 0 && count != -1) {
-		printf("Option error: count must > 0\n");
-		exit(1);
+	else if (cfg.count <= 0 && cfg.count != -1) {
+		fprintf(stderr, "Option error: count must > 0\n");
+		return HPING_PARSE_ERROR;
 	}
-	else if (sending_wait < 0) {
-		printf("Option error: bad timing interval\n");
-		exit(1);
+	else if (cfg.sending_wait < 0) {
+		fprintf(stderr, "Option error: bad timing interval\n");
+		return HPING_PARSE_ERROR;
 	}
-	else if (opt_waitinusec == TRUE && usec_delay.it_value.tv_usec < 0)
+	else if (cfg.opt_waitinusec == TRUE && cfg.usec_delay.it_value.tv_usec < 0)
 	{
-		printf("Option error: bad timing interval\n");
-		exit(1);
+		fprintf(stderr, "Option error: bad timing interval\n");
+		return HPING_PARSE_ERROR;
 	}
-	else if (opt_datafromfile == TRUE && data_size == 0)
+	else if (cfg.opt_datafromfile == TRUE && cfg.data_size == 0)
 	{
-		printf("Option error: -E option useless without -d\n");
-		exit(1);
+		fprintf(stderr, "Option error: -E option useless without -d\n");
+		return HPING_PARSE_ERROR;
 	}
-	else if (opt_sign && data_size && signlen > data_size)
+	else if (cfg.opt_sign && cfg.data_size && cfg.signlen > cfg.data_size)
 	{
-		printf(
+		fprintf(stderr, 
 	"Option error: signature (%d bytes) is larger than data size\n"
-	"check -d option, don't specify -d to let hping compute it\n", signlen);
-		exit(1);
+	"check -d option, don't specify -d to let hping compute it\n", cfg.signlen);
+		return HPING_PARSE_ERROR;
 	}
-	else if ((opt_sign || opt_listenmode) && signlen > 1024)
+	else if ((cfg.opt_sign || cfg.opt_listenmode) && cfg.signlen > 1024)
 	{
-		printf("Option error: signature too big\n");
-		exit(1);
+		fprintf(stderr, "Option error: signature too big\n");
+		return HPING_PARSE_ERROR;
 	}
-	else if (opt_safe == TRUE && src_id != -1)
+	else if (cfg.opt_safe == TRUE && cfg.src_id != -1)
 	{
-		printf("Option error: sorry, you can't set id and "
+		fprintf(stderr, "Option error: sorry, you can't set id and "
 				"use safe protocol at some time\n");
-		exit(1);
+		return HPING_PARSE_ERROR;
 	}
-	else if (opt_safe == TRUE && opt_datafromfile == FALSE &&
-			opt_listenmode == FALSE)
+	else if (cfg.opt_safe == TRUE && cfg.opt_datafromfile == FALSE &&
+			cfg.opt_listenmode == FALSE)
 	{
-		printf("Option error: sorry, safe protocol is useless "
+		fprintf(stderr, "Option error: sorry, safe protocol is useless "
 				"without 'data from file' option\n");
-		exit(1);
+		return HPING_PARSE_ERROR;
 	}
-	else if (opt_safe == TRUE && opt_sign == FALSE &&
-			opt_listenmode == FALSE)
+	else if (cfg.opt_safe == TRUE && cfg.opt_sign == FALSE &&
+			cfg.opt_listenmode == FALSE)
 	{
-		printf("Option error: sorry, safe protocol require you "
+		fprintf(stderr, "Option error: sorry, safe protocol require you "
 				"sign your packets, see --sign | -e option\n");
-		exit(1);
-	} else if (opt_rand_dest == TRUE && ifname[0] == '\0') {
-		printf("Option error: you need to specify an interface "
+		return HPING_PARSE_ERROR;
+	} else if (cfg.opt_rand_dest == TRUE && cfg.ifname[0] == '\0') {
+		fprintf(stderr, "Option error: you need to specify an interface "
 			"when the --rand-dest option is enabled\n");
-		exit(1);
+		return HPING_PARSE_ERROR;
 	}
 
 	/* dependences */
-	if (opt_safe == TRUE)
-		src_id = 1;
+	if (cfg.opt_safe == TRUE)
+		cfg.src_id = 1;
 
-	if (opt_traceroute == TRUE && ctrlzbind == BIND_DPORT)
-		ctrlzbind = BIND_TTL;
+	if (cfg.opt_traceroute == TRUE && cfg.ctrlzbind == BIND_DPORT)
+		cfg.ctrlzbind = BIND_TTL;
 
-	if (opt_traceroute == TRUE && src_ttl_set == 0)
-		src_ttl = DEFAULT_TRACEROUTE_TTL;
+	if (cfg.opt_traceroute == TRUE && src_ttl_set == 0)
+		cfg.src_ttl = DEFAULT_TRACEROUTE_TTL;
 
 	/* set the data size to the signature len if the no data size
 	 * was specified */
-	if (opt_sign && !data_size)
-		data_size = signlen;
+	if (cfg.opt_sign && !cfg.data_size)
+		cfg.data_size = cfg.signlen;
 
 	/* If scan mode is on, and the -i option was not used,
 	 * set the default delay to zero, that's send packets
 	 * as fast as possible. */
-	if (opt_scanmode && !delay_changed) {
-		opt_waitinusec = TRUE;
-		usec_delay.it_value.tv_sec =
-		usec_delay.it_interval.tv_sec = 0;
-		usec_delay.it_value.tv_usec = 
-		usec_delay.it_interval.tv_usec = 0;
+	if (cfg.opt_scanmode && !delay_changed) {
+		cfg.opt_waitinusec = TRUE;
+		cfg.usec_delay.it_value.tv_sec =
+		cfg.usec_delay.it_interval.tv_sec = 0;
+		cfg.usec_delay.it_value.tv_usec = 
+		cfg.usec_delay.it_interval.tv_usec = 0;
 	}
 
-	return 1;
+	/* what the senders cannot handle is rejected here, before any
+	 * socket is opened */
+	if (cfg.opt_icmpmode && !cfg.opt_force_icmp &&
+	    !icmp_type_supported(cfg.opt_icmptype)) {
+		fprintf(stderr, "Option error: unsupported ICMP type %d "
+			"(use --force-icmp to send it anyway)\n", cfg.opt_icmptype);
+		return HPING_PARSE_ERROR;
+	}
+	if (cfg.opt_rand_dest) {
+		unsigned char ra[4];
+		if (parse_rand_dest(cfg.targetname, ra) == -1) {
+			fprintf(stderr, "Option error: wrong --rand-dest target host, "
+				"correct examples:\n  x.x.x.x, 192.168.x.x, 128.x.x.255\n"
+				"you typed: %s\n", cfg.targetname);
+			return HPING_PARSE_ERROR;
+		}
+	}
+
+	return HPING_PARSE_OK;
 }

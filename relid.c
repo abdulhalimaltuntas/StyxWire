@@ -41,7 +41,7 @@ int relativize_id(int seqnum, int *ip_id)
 			last_seq = seqnum;
 			return TRUE;
 		} else {
-			out_of_sequence_pkt++;
+			stats.out_of_sequence++;
 		}
 	}
 	return FALSE;

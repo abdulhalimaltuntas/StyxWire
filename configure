@@ -1,166 +1,458 @@
 #!/bin/sh
+#
+# hping3 configure script.
+#
+# Plain POSIX sh, no autoconf. Detects the toolchain, libpcap, the optional
+# Tcl runtime and a few platform features, then writes Makefile, byteorder.h,
+# systype.h and .depend.
+#
+# Environment variables honoured: CC CPPFLAGS CFLAGS LDFLAGS LDLIBS AR RANLIB
+# PKG_CONFIG TCLSH TCL_CONFIG HPING_OSTYPE (override uname -s for cross builds).
+#
+# Exit status: 0 on success, 1 on any fatal configuration problem.
+
+# ---------------------------------------------------------------------------
+# defaults
+# ---------------------------------------------------------------------------
+PREFIX=/usr/local
+SBINDIR=
+MANDIR=
+DATADIR=
+WANT_TCL=auto		# auto | yes | no
+CC=${CC:-cc}
+AR=${AR:-ar}
+RANLIB=${RANLIB:-ranlib}
+PKG_CONFIG=${PKG_CONFIG:-pkg-config}
+CPPFLAGS=${CPPFLAGS:-}
+CFLAGS=${CFLAGS:--O2 -Wall -g}
+LDFLAGS=${LDFLAGS:-}
+LDLIBS=${LDLIBS:-}
+DEFS=
+TMPDIR_CFG=./.configure-tmp
 
 show_help()
 {
-	echo configure help:
-	echo "--help               show this help"
-	echo "--no-tcl             disable TCL scripting support"
-	echo "                     even if uid != euid"
+	cat <<EOF
+usage: ./configure [options]
+
+  --help                 show this help
+  --prefix=DIR           installation prefix              [$PREFIX]
+  --sbindir=DIR          binary directory                 [PREFIX/sbin]
+  --mandir=DIR           manual directory                 [PREFIX/share/man]
+  --datadir=DIR          data directory (Tcl scripts)     [PREFIX/share]
+  --no-tcl               disable Tcl scripting support
+  --with-tcl             require Tcl scripting support (fail if not found)
+
+environment:
+  CC CPPFLAGS CFLAGS LDFLAGS LDLIBS AR RANLIB PKG_CONFIG TCLSH TCL_CONFIG
+  HPING_OSTYPE           override "uname -s" (cross builds)
+
+"make install" also honours DESTDIR for staged installations.
+EOF
 }
 
-if [ "$1" = "--help" ]; then
-	show_help
-	exit 0
+die()
+{
+	# $TMPDIR_CFG is kept so that t.log can be inspected
+	echo "configure: error: $*" >&2
+	exit 1
+}
+
+cleanup()
+{
+	rm -rf "$TMPDIR_CFG"
+}
+
+# try_compile <description> <extra cflags> <extra libs> <source on stdin>
+# Returns 0 if the snippet compiles and links.
+try_link()
+{
+	_desc=$1; _cflags=$2; _libs=$3
+	cat > "$TMPDIR_CFG/t.c"
+	if $CC $CPPFLAGS $DEFS $_cflags $CFLAGS $LDFLAGS -o "$TMPDIR_CFG/t" \
+		"$TMPDIR_CFG/t.c" $_libs $LDLIBS > "$TMPDIR_CFG/t.log" 2>&1
+	then
+		echo "checking $_desc... yes"
+		return 0
+	else
+		echo "checking $_desc... no"
+		return 1
+	fi
+}
+
+try_compile()
+{
+	_desc=$1; _cflags=$2
+	cat > "$TMPDIR_CFG/t.c"
+	if $CC $CPPFLAGS $DEFS $_cflags $CFLAGS -c -o "$TMPDIR_CFG/t.o" \
+		"$TMPDIR_CFG/t.c" > "$TMPDIR_CFG/t.log" 2>&1
+	then
+		echo "checking $_desc... yes"
+		return 0
+	else
+		echo "checking $_desc... no"
+		return 1
+	fi
+}
+
+# ---------------------------------------------------------------------------
+# command line
+# ---------------------------------------------------------------------------
+for ARG in "$@"; do
+	case "$ARG" in
+	--help|-h)
+		show_help; exit 0 ;;
+	--prefix=*)
+		PREFIX=${ARG#--prefix=} ;;
+	--sbindir=*)
+		SBINDIR=${ARG#--sbindir=} ;;
+	--mandir=*)
+		MANDIR=${ARG#--mandir=} ;;
+	--datadir=*)
+		DATADIR=${ARG#--datadir=} ;;
+	--no-tcl)
+		WANT_TCL=no ;;
+	--with-tcl)
+		WANT_TCL=yes ;;
+	*)
+		echo "configure: unknown option '$ARG' (try --help)" >&2
+		exit 1 ;;
+	esac
+done
+
+[ -n "$SBINDIR" ] || SBINDIR="$PREFIX/sbin"
+[ -n "$MANDIR" ]  || MANDIR="$PREFIX/share/man"
+[ -n "$DATADIR" ] || DATADIR="$PREFIX/share"
+
+rm -rf "$TMPDIR_CFG"
+mkdir -p "$TMPDIR_CFG" || die "cannot create $TMPDIR_CFG"
+
+# ---------------------------------------------------------------------------
+# compiler
+# ---------------------------------------------------------------------------
+try_link "whether $CC works" "" "" <<EOF || die "C compiler '$CC' cannot build a program (see $TMPDIR_CFG/t.log)"
+int main(void) { return 0; }
+EOF
+
+# ---------------------------------------------------------------------------
+# system type
+# ---------------------------------------------------------------------------
+if [ -n "$HPING_OSTYPE" ]; then
+	CONFIGOSTYPE=$HPING_OSTYPE
+else
+	CONFIGOSTYPE=`uname -s 2>/dev/null | tr '[a-z]' '[A-Z]'`
+fi
+[ -n "$CONFIGOSTYPE" ] || CONFIGOSTYPE=UNKNOWN
+# for BSD/OS use the historical name as it doesn't include '/'
+[ "$CONFIGOSTYPE" = "BSD/OS" ] && CONFIGOSTYPE=BSDI
+CONFIGOSTYPE=`echo "$CONFIGOSTYPE" | tr -c 'A-Z0-9_\n' '_'`
+echo "system type: $CONFIGOSTYPE"
+
+SOLARISLIB=""
+case $CONFIGOSTYPE in
+SUNOS)
+	SOLARISLIB="-lsocket -lresolv -lnsl"
+	case `uname -r` in
+	2.0*|5.0*|2.1*|5.1*|2.2*|5.2*|2.3*|5.3*|2.4*|5.4*|5.5.1)
+		DEFS="$DEFS -DSTUPID_SOLARIS_CHECKSUM_BUG" ;;
+	esac ;;
+esac
+
+# ---------------------------------------------------------------------------
+# byte order
+#
+# byteorder.h prefers the compiler's __BYTE_ORDER__ macro (works when cross
+# compiling). The historical runtime probe (byteorder.c) is only used as a
+# fallback for compilers that do not define the macro.
+# ---------------------------------------------------------------------------
+BYTEORDER=
+if try_compile "for __BYTE_ORDER__" "" <<EOF
+#if !defined(__BYTE_ORDER__) || !defined(__ORDER_LITTLE_ENDIAN__)
+#error no __BYTE_ORDER__
+#endif
+int x;
+EOF
+then
+	BYTEORDER=macro
+else
+	echo "building byteorder probe..."
+	$CC $CFLAGS -o "$TMPDIR_CFG/byteorder" byteorder.c || die "cannot build byteorder.c"
+	BYTEORDER=`"$TMPDIR_CFG/byteorder" -m` || die "cannot run the byteorder probe (cross compiling? set a compiler that defines __BYTE_ORDER__)"
+	case $BYTEORDER in
+	__LITTLE_ENDIAN_BITFIELD|__BIG_ENDIAN_BITFIELD) ;;
+	*) die "unexpected byteorder probe result '$BYTEORDER'" ;;
+	esac
+	echo "byte order (runtime probe): $BYTEORDER"
 fi
 
-CC=${CC:=cc}
-
-echo build byteorder.c...
-$CC byteorder.c -o byteorder || exit 1
-
-INSTALL_MANPATH=`echo $MANPATH|cut -f1 -d:`
-if [ "$INSTALL_MANPATH" = "" ]; then
-	INSTALL_MANPATH="/usr/local/man"
-fi
-BYTEORDER=`./byteorder -m`
-
-echo create byteorder.h...
+echo "creating byteorder.h..."
 cat > byteorder.h <<EOF
+/* Generated by configure -- do not edit */
 #ifndef __BYTEORDER_H
 #define __BYTEORDER_H
 
+#if defined(__BYTE_ORDER__) && defined(__ORDER_LITTLE_ENDIAN__)
+# if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+#  ifndef __LITTLE_ENDIAN_BITFIELD
+#   define __LITTLE_ENDIAN_BITFIELD
+#  endif
+# else
+#  ifndef __BIG_ENDIAN_BITFIELD
+#   define __BIG_ENDIAN_BITFIELD
+#  endif
+# endif
+#else
 EOF
-echo \#ifndef $BYTEORDER >> byteorder.h
-echo \#define $BYTEORDER >> byteorder.h
-echo \#endif /\* $BYTEORDER \*/ >> byteorder.h
+if [ "$BYTEORDER" = macro ]; then
+	echo "# error \"byte order unknown: compiler lacks __BYTE_ORDER__, re-run configure\"" >> byteorder.h
+else
+	echo "# ifndef $BYTEORDER" >> byteorder.h
+	echo "#  define $BYTEORDER" >> byteorder.h
+	echo "# endif" >> byteorder.h
+fi
 cat >> byteorder.h <<EOF
+#endif
 
 #endif /* __BYTEORDER_H */
 EOF
 
-CONFIGOSTYPE=`uname -s | tr [a-z] [A-Z]`
-if [ ! "$CONFIGOSTYPE" ]; then
-	CONFIGOSTYPE=UNKNOWN
+# ---------------------------------------------------------------------------
+# libpcap
+# ---------------------------------------------------------------------------
+PCAP_CFLAGS=""
+PCAP_LIBS=""
+if $PKG_CONFIG --exists libpcap 2>/dev/null; then
+	PCAP_CFLAGS=`$PKG_CONFIG --cflags libpcap`
+	PCAP_LIBS=`$PKG_CONFIG --libs libpcap`
+	echo "libpcap: pkg-config `$PKG_CONFIG --modversion libpcap`"
+elif command -v pcap-config >/dev/null 2>&1; then
+	PCAP_CFLAGS=`pcap-config --cflags`
+	PCAP_LIBS=`pcap-config --libs`
+	echo "libpcap: pcap-config"
+else
+	PCAP_LIBS="-lpcap"
+	echo "libpcap: assuming -lpcap"
 fi
 
-# for BSD/OS use the historical name as it doesn't include '/'
-if [  $CONFIGOSTYPE = "BSD/OS" ]; then
-	CONFIGOSTYPE=BSDI
+try_link "for pcap.h and libpcap" "$PCAP_CFLAGS" "$PCAP_LIBS" <<EOF || die "libpcap (pcap.h + libpcap) not found; install the libpcap development package or set CPPFLAGS/LDFLAGS"
+#include <pcap.h>
+int main(void) { char e[PCAP_ERRBUF_SIZE]; pcap_t *p = pcap_open_dead(1, 65535); (void)e; if (p) pcap_close(p); return 0; }
+EOF
+
+if try_link "for pcap_set_immediate_mode (libpcap >= 1.5)" "$PCAP_CFLAGS" "$PCAP_LIBS" <<EOF
+#include <pcap.h>
+int main(void) { pcap_t *p = pcap_create("lo", (char*)0); return p ? pcap_set_immediate_mode(p, 1) : 0; }
+EOF
+then
+	DEFS="$DEFS -DHAVE_PCAP_SET_IMMEDIATE_MODE"
+fi
+if try_link "for pcap_get_required_select_timeout (libpcap >= 1.9)" "$PCAP_CFLAGS" "$PCAP_LIBS" <<EOF
+#include <pcap.h>
+int main(void) { pcap_t *p = pcap_open_dead(1, 100); return pcap_get_required_select_timeout(p) != 0; }
+EOF
+then
+	DEFS="$DEFS -DHAVE_PCAP_GET_REQUIRED_SELECT_TIMEOUT"
 fi
 
-case $CONFIGOSTYPE in
-  SUNOS)
-    SOLARISLIB="-lsocket -lresolv -lnsl"
-    BUG='/* #define STUPID_SOLARIS_CHECKSUM_BUG */'
-    case `uname -r` in
-      2.0*|5.0*|2.1*|5.1*|2.2*|5.2*|2.3*|5.3*|2.4*|5.4*|5.5.1)
-               BUG='#define STUPID_SOLARIS_CHECKSUM_BUG' ;;
-    esac
-esac
+# BSD systems provide BIOCIMMEDIATE in <net/bpf.h>; Linux does not have the
+# header at all (libpcap's own pcap/bpf.h is included by pcap.h already).
+if try_compile "for net/bpf.h" "$PCAP_CFLAGS" <<EOF
+#include <sys/types.h>
+#include <sys/ioctl.h>
+#include <net/bpf.h>
+int x;
+EOF
+then
+	DEFS="$DEFS -DHAVE_NET_BPF_H"
+fi
 
-#
-# TCL detection
-#
-for TCLPATH_TRY in "/usr/bin/" "/usr/local/bin/" "/bin/"
-do
-	for TCLVER_TRY in "8.4" "8.3" "8.2" "8.1" "8.0"
-	do
-		if [ -z $TCLSH ]
-		then
-			TCLSH_TRY=${TCLPATH_TRY}tclsh${TCLVER_TRY}
-			if [ -f $TCLSH_TRY ]
-			then
-				TCLSH=$TCLSH_TRY
-				echo "===> Found Tclsh in: $TCLSH"
-			fi
-		fi
+# ---------------------------------------------------------------------------
+# libc features
+# ---------------------------------------------------------------------------
+if try_link "for strlcpy" "" "" <<EOF
+#include <string.h>
+int main(void) { char b[4]; return (int)strlcpy(b, "x", sizeof(b)); }
+EOF
+then
+	DEFS="$DEFS -DHAVE_STRLCPY"
+fi
+
+# ---------------------------------------------------------------------------
+# Tcl (optional)
+# ---------------------------------------------------------------------------
+USE_TCL=""
+TCL_INC=""
+TCL_LIB=""
+TCL_VER=""
+TCLSH_FOUND=""
+TCL_SOURCE=""
+
+tcl_try_config()
+{
+	# $1 = path to tclConfig.sh
+	[ -f "$1" ] || return 1
+	TCL_VERSION=""; TCL_INCLUDE_SPEC=""; TCL_LIB_SPEC=""; TCL_LIBS=""
+	. "$1" || return 1
+	[ -n "$TCL_VERSION" ] || return 1
+	TCL_VER=$TCL_VERSION
+	TCL_INC="$TCL_INCLUDE_SPEC"
+	TCL_LIB="$TCL_LIB_SPEC $TCL_LIBS"
+	TCL_SOURCE="$1"
+	return 0
+}
+
+tcl_try_pkgconfig()
+{
+	# $1 = pkg-config module name
+	$PKG_CONFIG --exists "$1" 2>/dev/null || return 1
+	TCL_VER=`$PKG_CONFIG --modversion "$1"`
+	TCL_INC=`$PKG_CONFIG --cflags "$1"`
+	TCL_LIB=`$PKG_CONFIG --libs "$1"`
+	TCL_SOURCE="pkg-config $1"
+	return 0
+}
+
+tcl_try_tclsh()
+{
+	# $1 = tclsh binary
+	command -v "$1" >/dev/null 2>&1 || return 1
+	_v=`echo 'puts $tcl_version' | "$1" 2>/dev/null` || return 1
+	[ -n "$_v" ] || return 1
+	_lib=`echo 'puts [file dirname [info library]]' | "$1" 2>/dev/null`
+	TCL_VER=$_v
+	TCLSH_FOUND=`command -v "$1"`
+	TCL_INC=""
+	for d in /usr/include/tcl$_v /usr/local/include/tcl$_v /usr/include/tcl /usr/local/include; do
+		if [ -f "$d/tcl.h" ]; then TCL_INC="-I$d"; break; fi
 	done
-done
-if [ -f $TCLSH ]
-then
-	TCL_VER=`echo puts \\$tcl_version | $TCLSH -`
-	USE_TCL='-DUSE_TCL'
-	TCL_LIB="-ltcl${TCL_VER}"
-	if [ -e /usr/include/tcl${TCL_VER} ]
-	then
-		TCL_INC="-I/usr/include/tcl${TCL_VER}"
-	elif [ -e /usr/include/tcl.h ]
-	then
-		TCL_INC=""
-	elif [ -e /usr/local/include/tcl${TCL_VER} ]
-	then
-		TCL_INC="-I/usr/local/include/tcl${TCL_VER}"
-	else
-		USE_TCL=""
-		TCL_LIB=""
-		echo "==> WARNING: no Tcl header files found!"
+	TCL_LIB="-ltcl$_v -lm"
+	[ -n "$_lib" ] && [ -f "$_lib/tclConfig.sh" ] && tcl_try_config "$_lib/tclConfig.sh"
+	TCL_SOURCE="tclsh $TCLSH_FOUND"
+	return 0
+}
+
+if [ "$WANT_TCL" != no ]; then
+	found=0
+	if [ -n "$TCL_CONFIG" ]; then
+		tcl_try_config "$TCL_CONFIG" && found=1
 	fi
+	if [ $found = 0 ] && [ -n "$TCLSH" ]; then
+		tcl_try_tclsh "$TCLSH" && found=1
+	fi
+	if [ $found = 0 ]; then
+		for m in tcl tcl9.0 tcl8.6 tcl8.5; do
+			tcl_try_pkgconfig $m && { found=1; break; }
+		done
+	fi
+	if [ $found = 0 ]; then
+		for f in /usr/lib/tclConfig.sh /usr/lib64/tclConfig.sh \
+			 /usr/local/lib/tclConfig.sh /usr/lib/tcl8.6/tclConfig.sh \
+			 /usr/lib/tcl9.0/tclConfig.sh /usr/lib/x86_64-linux-gnu/tclConfig.sh \
+			 /usr/lib/x86_64-linux-gnu/tcl8.6/tclConfig.sh \
+			 /usr/local/lib/tcl8.6/tclConfig.sh /opt/local/lib/tclConfig.sh; do
+			tcl_try_config "$f" && { found=1; break; }
+		done
+	fi
+	if [ $found = 0 ]; then
+		for t in tclsh tclsh8.6 tclsh9.0 tclsh8.5; do
+			tcl_try_tclsh $t && { found=1; break; }
+		done
+	fi
+	if [ $found = 1 ]; then
+		echo "Tcl $TCL_VER found via $TCL_SOURCE"
+		if try_link "that Tcl headers and library are usable" "$TCL_INC" "$TCL_LIB" <<EOF
+#include <tcl.h>
+int main(void) { Tcl_Interp *i = Tcl_CreateInterp(); Tcl_DeleteInterp(i); return 0; }
+EOF
+		then
+			USE_TCL="-DUSE_TCL"
+		else
+			found=0
+			echo "Tcl $TCL_VER was found but a test program does not build (see $TMPDIR_CFG/t.log)"
+		fi
+	fi
+	if [ $found = 0 ]; then
+		if [ "$WANT_TCL" = yes ]; then
+			die "--with-tcl given but no usable Tcl installation found (set TCL_CONFIG=/path/to/tclConfig.sh)"
+		fi
+		echo "Tcl scripting support DISABLED (no usable Tcl found; use --with-tcl to make this fatal)"
+		TCL_INC=""; TCL_LIB=""; TCL_VER=""
+	fi
+else
+	echo "Tcl scripting support disabled by --no-tcl"
 fi
-if [ -n $USE_TCL ]
-then
-	LIBPOSTFIX=`ls -1 /usr/local/lib/ /usr/lib | grep 'libtcl[0-9]' | grep so | sed -e 's/\.so.*//g' -e 's/libtcl//g' | sort -r | head -1`
-	TCL_LIB="-ltcl${LIBPOSTFIX} -lm -lpthread"
-fi
 
-#
-# configurable stuff
-#
-PCAP="PCAP=-lpcap"
-PCAP_INCLUDE=""
-
-for ARG in $*; do
-	case "$ARG" in
-		*"--no-tcl")
-			USE_TCL=""
-			TCL_VER=""
-			TCL_INC=""
-			TCL_LIB=""
-			;;
-	esac
-done
-
-echo --------------------------------------
-echo system type: $CONFIGOSTYPE
-echo
-echo "LIBPCAP      : $PCAP"
-echo "PCAP_INCLUDE : $PCAP_INCLUDE"
-echo "MANPATH      : $INSTALL_MANPATH"
-echo "USE_TCL      : $USE_TCL"
-echo "TCL_VER      : $TCL_VER"
-echo "TCL_INC      : $TCL_INC"
-echo "LIBTCL       : $TCL_LIB"
-echo "TCLSH        : $TCLSH"
-echo
-echo "(to modify try configure --help)"
-echo --------------------------------------
-
-echo creating Makefile...
-sed	-e "s^@PCAP@^$PCAP^g" \
-	-e "s^@PCAP_INCLUDE@^$PCAP_INCLUDE^g" \
-	-e "s^@MANPATH@^$INSTALL_MANPATH^g" \
-	-e "s^@SOLARISLIB@^$SOLARISLIB^g" \
-	-e "s^@USE_TCL@^$USE_TCL^g" \
-	-e "s^@TCL_INC@^$TCL_INC^g" \
-	-e "s^@TCL_VER@^$TCL_VER^g" \
-	-e "s^@TCL_LIB@^$TCL_LIB^g" \
-	<Makefile.in > Makefile
-
-#
-#
-#
-
+# ---------------------------------------------------------------------------
+# systype.h
+# ---------------------------------------------------------------------------
+echo "creating systype.h..."
 cat > systype.h <<EOF
+/* Generated by configure -- do not edit */
 #ifndef __SYSTYPE_H
 #define __SYSTYPE_H
 
-EOF
-echo \#define OSTYPE_${CONFIGOSTYPE} >> systype.h
-cat >> systype.h <<EOF
+#define OSTYPE_${CONFIGOSTYPE}
 
 #endif /* SYSTYPE_H */
 EOF
 
-echo creating dependences...
-$CC -MM *.c > .depend
+# ---------------------------------------------------------------------------
+# Makefile
+# ---------------------------------------------------------------------------
+echo "creating Makefile..."
+{
+	cat <<EOF
+# Generated by configure -- edit Makefile.in and re-run ./configure instead
+CC = $CC
+AR = $AR
+RANLIB = $RANLIB
+CPPFLAGS = $CPPFLAGS
+CFLAGS = $CFLAGS
+LDFLAGS = $LDFLAGS
+LDLIBS = $LDLIBS
+DEFS = $DEFS
+PCAP_CFLAGS = $PCAP_CFLAGS
+PCAP_LIBS = $PCAP_LIBS
+SOLARISLIB = $SOLARISLIB
+USE_TCL = $USE_TCL
+TCL_VER = $TCL_VER
+TCL_INC = $TCL_INC
+TCL_LIB = $TCL_LIB
+TCLSH = $TCLSH_FOUND
+PREFIX = $PREFIX
+prefix = $PREFIX
+sbindir = $SBINDIR
+mandir = $MANDIR
+datadir = $DATADIR
+CONFIGURE_ARGS = $*
 
-echo now you can try \`make\'
+EOF
+	cat Makefile.in
+} > Makefile
+
+# ---------------------------------------------------------------------------
+# dependencies
+# ---------------------------------------------------------------------------
+echo "creating dependences..."
+$CC $CPPFLAGS $DEFS $PCAP_CFLAGS $TCL_INC $USE_TCL -MM *.c > .depend || die "cannot generate .depend"
+
+cleanup
+
+cat <<EOF
+--------------------------------------
+system type  : $CONFIGOSTYPE
+CC           : $CC
+CFLAGS       : $CFLAGS
+LIBPCAP      : $PCAP_LIBS
+DEFS         : $DEFS
+USE_TCL      : ${USE_TCL:-(disabled)}
+TCL_VER      : $TCL_VER
+TCL_INC      : $TCL_INC
+LIBTCL       : $TCL_LIB
+prefix       : $PREFIX
+sbindir      : $SBINDIR
+mandir       : $MANDIR
+--------------------------------------
+now you can try \`make' (and \`make check' to run the tests)
+EOF
+exit 0

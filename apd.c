@@ -89,9 +89,6 @@ do { \
 		return -ARS_INVALID; \
 } while(0)
 
-#define BOGUS_SET_F(x) \
-  int (x)(struct ars_packet *pkt, int layer, char *f, char *v) { return 0; }
-
 int ars_d_set_ip(struct ars_packet *pkt, int layer, char *f, char *v);
 int ars_d_set_udp(struct ars_packet *pkt, int layer, char *f, char *v);
 int ars_d_set_tcp(struct ars_packet *pkt, int layer, char *f, char *v);
@@ -109,7 +106,7 @@ int ars_d_set_tcpopt_echo(struct ars_packet *pkt, int layer, char *f, char *v);
 int ars_d_set_tcpopt_dumb(struct ars_packet *pkt, int layer, char *f, char *v);
 int ars_d_set_igrp(struct ars_packet *pkt, int layer, char *f, char *v);
 int ars_d_set_igrpentry(struct ars_packet *pkt, int layer, char *f, char *v);
-BOGUS_SET_F(ars_d_set_tcpopt_ts)
+int ars_d_set_tcpopt_ts(struct ars_packet *pkt, int layer, char *f, char *v);
 
 struct ars_d_keyword_info ars_dkinfo[ARS_DKINFO_SIZE] = {
 	/* KEYWORD	OPT		ADD function	SET function *
@@ -132,8 +129,10 @@ struct ars_d_keyword_info ars_dkinfo[ARS_DKINFO_SIZE] = {
 	{"tcp.sackperm", ARS_TCPOPT_SACK_PERM, ars_add_tcpopt, ars_d_set_tcpopt_dumb},
 	{"tcp.sack", ARS_TCPOPT_SACK, ars_add_tcpopt, ars_d_set_tcpopt_sack},
 	{"tcp.echo", ARS_TCPOPT_ECHOREQUEST, ars_add_tcpopt, ars_d_set_tcpopt_echo},
+	{"tcp.echoreq", ARS_TCPOPT_ECHOREQUEST, ars_add_tcpopt, ars_d_set_tcpopt_echo}, /* alias */
 	{"tcp.echoreply", ARS_TCPOPT_ECHOREPLY, ars_add_tcpopt, ars_d_set_tcpopt_echo},
 	{"tcp.ts",	ARS_TCPOPT_TIMESTAMP, ars_add_tcpopt, ars_d_set_tcpopt_ts},
+	{"tcp.timestamp", ARS_TCPOPT_TIMESTAMP, ars_add_tcpopt, ars_d_set_tcpopt_ts}, /* alias */
 	{"icmp",	0,		ars_add_icmphdr, ars_d_set_icmp},
 	{"igrp",	0,		ars_add_igrphdr, ars_d_set_igrp},
 	{"igrp.entry",	0,		ars_add_igrpentry, ars_d_set_igrpentry},
@@ -427,7 +426,7 @@ int ars_d_set_ipopt_sec(struct ars_packet *pkt, int layer, char *f, char *v)
 			ars_set_error(pkt, "Invalid ip.sec tcc field value of '%s'(should be six hex digits, like this: ...,tcc=252A27,...)", v);
 			return -ARS_INVALID;
 		}
-		if (hextobin(&ipopt->un.sec.h, v, 6)) {
+		if (hextobin(ipopt->un.sec.tcc, v, 6)) {
 			ars_set_error(pkt, "Invalid hex value for ip.sec hex: '%s'", v);
 			return -ARS_INVALID;
 		}
@@ -556,7 +555,7 @@ int ars_d_set_tcpopt_wscale(struct ars_packet *pkt, int layer, char *f, char *v)
 	if (strcasecmp(f, "optlen") == 0) {
 		tcpopt->len = ars_atou(v);
 	} else if (strcasecmp(f, "shift") == 0) {
-		tcpopt->un.win.shift = htons(ars_atou(v));
+		tcpopt->un.win.shift = ars_atou(v);
 	} else {
 		ars_set_error(pkt, "Invalid field for TCP.WSCALE layer: '%s'", f);
 		return -ARS_INVALID;
@@ -632,6 +631,28 @@ int ars_d_set_tcpopt_echo(struct ars_packet *pkt, int layer, char *f, char *v)
 		memcpy(tcpopt->un.echo.info, &info, 4);
 	} else {
 		ars_set_error(pkt, "Invalid field for TCP.ECHO layer: '%s'", f);
+		return -ARS_INVALID;
+	}
+	return -ARS_OK;
+}
+
+int ars_d_set_tcpopt_ts(struct ars_packet *pkt, int layer, char *f, char *v)
+{
+	struct ars_tcpopt *tcpopt;
+	u_int32_t t;
+
+	ARS_DEF_LAYER;
+	tcpopt = pkt->p_layer[layer].l_data;
+	if (strcasecmp(f, "optlen") == 0) {
+		tcpopt->len = ars_atou(v);
+	} else if (strcasecmp(f, "val") == 0 || strcasecmp(f, "tsval") == 0) {
+		t = htonl(ars_atou(v));
+		memcpy(tcpopt->un.timestamp.tsval, &t, 4);
+	} else if (strcasecmp(f, "ecr") == 0 || strcasecmp(f, "tsecr") == 0) {
+		t = htonl(ars_atou(v));
+		memcpy(tcpopt->un.timestamp.tsecr, &t, 4);
+	} else {
+		ars_set_error(pkt, "Invalid field for TCP.TS layer: '%s'", f);
 		return -ARS_INVALID;
 	}
 	return -ARS_OK;
@@ -772,6 +793,8 @@ int ars_push_data(struct ars_packet *pkt, int layer, void *data, size_t size)
 	int old_size;
 
 	ARS_DEF_LAYER;
+	if (size == 0)
+		return ARS_OK; /* nothing to add (realloc(p, 0) is unsafe) */
 	old_size = pkt->p_layer[layer].l_size;
 	p = realloc(pkt->p_layer[layer].l_data, old_size + size);
 	if (p == NULL)
@@ -782,13 +805,18 @@ int ars_push_data(struct ars_packet *pkt, int layer, void *data, size_t size)
 	return ARS_OK;
 }
 
-static int hextab[256];
-static int hextab_initialized = 0;
-static char *hexdig = "0123456789abcdef";
+/* hex digit -> value, -1 for anything else (both cases accepted) */
+static int hexval(int c)
+{
+	if (c >= '0' && c <= '9') return c - '0';
+	if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+	if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+	return -1;
+}
 
 static char *ars_decode_hex(struct ars_packet *pkt, char *s, int *blen)
 {
-	int len = strlen(s), i;
+	int len = strlen(s);
 	unsigned char *d, *saved;
 
 	if (len%2) {
@@ -796,12 +824,7 @@ static char *ars_decode_hex(struct ars_packet *pkt, char *s, int *blen)
 		return NULL;
 	}
 	*blen = len/2;
-	if (!hextab_initialized) {
-		memset(hextab, 255, 255);
-		for (i = 0; i < 16; i++)
-			hextab[(int)hexdig[i]] = i;
-	}
-	if ((d = malloc(*blen)) == NULL) {
+	if ((d = malloc(*blen + 1)) == NULL) { /* +1: never malloc(0) */
 		ars_set_error(pkt, "Out of memory decoding 'hex' data");
 		return NULL;
 	}
@@ -809,9 +832,9 @@ static char *ars_decode_hex(struct ars_packet *pkt, char *s, int *blen)
 	while(*s) {
 		int x0, x1;
 
-		x0 = hextab[tolower(*s)];
-		x1 = hextab[tolower(*(s+1))];
-		if (x0 == 255 || x1 == 255) {
+		x0 = hexval((unsigned char)*s);
+		x1 = hexval((unsigned char)*(s+1));
+		if (x0 < 0 || x1 < 0) {
 			ars_set_error(pkt, "Wrong byte for 'hex' data: '%c%c'",
 					*s, *(s+1));
 			free(saved);
@@ -823,25 +846,26 @@ static char *ars_decode_hex(struct ars_packet *pkt, char *s, int *blen)
 	return (char*)saved;
 }
 
+/* "str" data: a backslash followed by two hex digits is one byte, any
+ * other backslash sequence is taken literally. */
 static char *ars_decode_string(struct ars_packet *pkt, char *s, int *blen)
 {
-	int l = strlen(s), i;
+	int l = strlen(s);
 	int bl = 0;
 	unsigned char *d, *saved;
 
-	if (!hextab_initialized) {
-		memset(hextab, -1, 255);
-		for (i = 0; i < 16; i++)
-			hextab[(int)hexdig[i]] = i;
-	}
-	if ((d = malloc(l)) == NULL) {
+	if ((d = malloc(l + 1)) == NULL) { /* +1: never malloc(0) */
 		ars_set_error(pkt, "Out of memory decoding 'str' data");
 		return NULL;
 	}
 	saved = d;
 	while(*s) {
-		if (*s == '\\' && *(s+1) && *(s+2)) {
-			*d++ = (hextab[(int)*(s+1)] << 4) + hextab[(int)*(s+2)];
+		int x0, x1;
+
+		if (*s == '\\' && *(s+1) && *(s+2) &&
+		    (x0 = hexval((unsigned char)*(s+1))) >= 0 &&
+		    (x1 = hexval((unsigned char)*(s+2))) >= 0) {
+			*d++ = (x0 << 4) | x1;
 			s += 3;
 		} else {
 			*d++ = *s++;
@@ -893,6 +917,7 @@ int ars_d_set_data(struct ars_packet *pkt, int layer, char *f, char *v)
 			return -ARS_ERROR;
 		err = ars_push_data(pkt, layer, binary, blen);
 		free(binary);
+		return err;
 	} else if (strcasecmp(f, "uint32") == 0) {
 		int err;
 		__u32 t, nt;

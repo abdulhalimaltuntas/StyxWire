@@ -15,31 +15,32 @@
 #include "hping2.h"
 #include "globals.h"
 
-void send_ip_handler(char *packet, unsigned int size)
+int send_ip_handler(char *packet, unsigned int size)
 {
-	ip_optlen = ip_opt_build(ip_opt);
+	int rc = 0;
+	ctx.ip_optlen = ip_opt_build(ctx.ip_opt);
 
-	if (!opt_fragment && (size+ip_optlen+20 >= h_if_mtu))
+	if (!cfg.opt_fragment && (size+ctx.ip_optlen+20 >= ctx.h_if_mtu))
 	{
 		/* auto-activate fragmentation */
-		virtual_mtu = h_if_mtu-20;
-		virtual_mtu = virtual_mtu - (virtual_mtu % 8);
-		opt_fragment = TRUE;
-		opt_mf = opt_df = FALSE; /* deactivate incompatible options */
-		if (opt_verbose || opt_debug)
-			printf("auto-activate fragmentation, fragments size: %d\n", virtual_mtu);
+		cfg.virtual_mtu = ctx.h_if_mtu-20;
+		cfg.virtual_mtu = cfg.virtual_mtu - (cfg.virtual_mtu % 8);
+		cfg.opt_fragment = TRUE;
+		cfg.opt_mf = cfg.opt_df = FALSE; /* deactivate incompatible options */
+		if (cfg.opt_verbose || cfg.opt_debug)
+			printf("auto-activate fragmentation, fragments size: %d\n", cfg.virtual_mtu);
 	}
 
-	if (!opt_fragment)
+	if (!cfg.opt_fragment)
 	{
 		unsigned short fragment_flag = 0;
 
-		if (opt_mf) fragment_flag |= MF; /* more fragments */
-		if (opt_df) fragment_flag |= DF; /* dont fragment */
-		send_ip((char*)&local.sin_addr,
-			(char*)&remote.sin_addr,
-			packet, size, fragment_flag, ip_frag_offset,
-			ip_opt, ip_optlen);
+		if (cfg.opt_mf) fragment_flag |= MF; /* more fragments */
+		if (cfg.opt_df) fragment_flag |= DF; /* dont fragment */
+		rc = send_ip((char*)&ctx.local.sin_addr,
+			(char*)&ctx.remote.sin_addr,
+			packet, size, fragment_flag, cfg.ip_frag_offset,
+			ctx.ip_opt, ctx.ip_optlen);
 	}
 	else
 	{
@@ -47,23 +48,24 @@ void send_ip_handler(char *packet, unsigned int size)
 		int frag_offset = 0;
 
 		while(1) {
-			if (remainder <= virtual_mtu)
+			if (remainder <= cfg.virtual_mtu)
 				break;
 
-			send_ip((char*)&local.sin_addr,
-				(char*)&remote.sin_addr,
+			send_ip((char*)&ctx.local.sin_addr,
+				(char*)&ctx.remote.sin_addr,
 				packet+frag_offset,
-				virtual_mtu, MF, frag_offset,
-				ip_opt, ip_optlen);
+				cfg.virtual_mtu, MF, frag_offset,
+				ctx.ip_opt, ctx.ip_optlen);
 
-			remainder-=virtual_mtu;
-			frag_offset+=virtual_mtu;
+			remainder-=cfg.virtual_mtu;
+			frag_offset+=cfg.virtual_mtu;
 		}
 
-		send_ip((char*)&local.sin_addr,
-			(char*)&remote.sin_addr,
+		rc = send_ip((char*)&ctx.local.sin_addr,
+			(char*)&ctx.remote.sin_addr,
 			packet+frag_offset,
 			remainder, NF, frag_offset,
-			ip_opt, ip_optlen);
+			ctx.ip_opt, ctx.ip_optlen);
 	}
+	return rc;
 }

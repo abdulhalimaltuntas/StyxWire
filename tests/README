@@ -1,0 +1,39 @@
+Offline test-suite for hping3 -- run with "make check" from the top dir.
+
+  test_core.c        helpers (memstr, hex, hstring, adbuf, checksums),
+                     --rand-dest parsing, the ARS packet builder/splitter/
+                     serializer (apd.c, split.c, rapd.c, ars.c) with valid
+                     and malformed packets, display_ipopt(), send_icmp_other()
+                     and pcap_recv() against a pcap savefile.
+  test_waitpacket.c  the receive path: quoted headers in ICMP errors, TCP
+                     option walking, HCMP, wait_packet() from a savefile.
+  test_scan.c        --scan port list parsing, reply handling and the whole
+                     probing state machine driven with the fake clock.
+  test_loop.c        the event loop (lifecycle.c): probe deadlines, RTTs,
+                     duplicates/unmatched replies, --count, interrupts,
+                     send errors, wall clock jumps, injected randomness,
+                     partial init cleanup, the real poll()/pcap path on a
+                     savefile and a real SIGINT waking poll() up.
+  test_parse.c       parse_options() as a function: argv in, cfg out.
+  test_script.c      Tcl binding (built with Tcl only): multi-packet
+                     'hping recv', 'recvraw' byte arrays, field commands,
+                     argument validation, bignum commands.
+  cli.sh             ./hping3 --help/--version and option validation.
+  install.sh         staged "make install DESTDIR=..." layout check.
+  libars.sh          links tests/libars_link.c against libars.a alone.
+  fakeio.h           fake clock, scripted frames and simulated interrupts.
+  run.sh             the runner used by "make check".
+  stub_send.c        test double for send_ip_handler(): captures packets.
+  testutil.h         assertion macros and packet builders.
+
+Every test binary links the real hping objects except main.o (the tests
+have their own main()) and sendip_handler.o (replaced by the stub); each
+starts from hping_config_init()/hping_context_init()/hping_stats_init(),
+so the groups never see each other's state. No root, no network traffic, no
+capture device: packets are built in memory or read from savefiles the
+tests write themselves. Exit status 77 means "skipped".
+
+Regression tests reference the defect they guard against in a
+"Regression:" comment. To see them fail against the old code, build the
+test against the pre-fix version of the file under ASan/UBSan
+(make clean && make check SANITIZE=1).

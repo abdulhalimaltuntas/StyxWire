@@ -21,8 +21,9 @@
 #include "hping2.h"
 #include "globals.h"
 
-void send_tcp(void)
+int send_tcp(void)
 {
+	int rc;
 	int			packet_size;
 	int			tcp_opt_size = 0;
 	char			*packet, *data;
@@ -30,14 +31,14 @@ void send_tcp(void)
 	struct pseudohdr	*pseudoheader;
 	unsigned char		*tstamp;
 
-	if (opt_tcp_timestamp)
+	if (cfg.opt_tcp_timestamp)
 		tcp_opt_size = 12;
 
-	packet_size = TCPHDR_SIZE + tcp_opt_size + data_size;
+	packet_size = TCPHDR_SIZE + tcp_opt_size + cfg.data_size;
 	packet = malloc(PSEUDOHDR_SIZE + packet_size);
 	if (packet == NULL) {
 		perror("[send_tcphdr] malloc()");
-		return;
+		return -1;
 	}
 	pseudoheader = (struct pseudohdr*) packet;
 	tcp =  (struct mytcphdr*) (packet+PSEUDOHDR_SIZE);
@@ -47,26 +48,26 @@ void send_tcp(void)
 	memset(packet, 0, PSEUDOHDR_SIZE+packet_size);
 
 	/* tcp pseudo header */
-	memcpy(&pseudoheader->saddr, &local.sin_addr.s_addr, 4);
-	memcpy(&pseudoheader->daddr, &remote.sin_addr.s_addr, 4);
+	memcpy(&pseudoheader->saddr, &ctx.local.sin_addr.s_addr, 4);
+	memcpy(&pseudoheader->daddr, &ctx.remote.sin_addr.s_addr, 4);
 	pseudoheader->protocol		= 6; /* tcp */
-	pseudoheader->lenght		= htons(TCPHDR_SIZE+tcp_opt_size+data_size);
+	pseudoheader->lenght		= htons(TCPHDR_SIZE+tcp_opt_size+cfg.data_size);
 
 	/* tcp header */
-	tcp->th_dport	= htons(dst_port);
-	tcp->th_sport	= htons(src_port);
+	tcp->th_dport	= htons(cfg.dst_port);
+	tcp->th_sport	= htons(ctx.src_port);
 
 	/* sequence number and ack are random if not set */
-	tcp->th_seq = (set_seqnum) ? htonl(tcp_seqnum) : htonl(rand());
-	tcp->th_ack = (set_ack) ? htonl(tcp_ack) : htonl(rand());
+	tcp->th_seq = (cfg.set_seqnum) ? htonl(cfg.tcp_seqnum) : htonl(hping_rand());
+	tcp->th_ack = (cfg.set_ack) ? htonl(cfg.tcp_ack) : htonl(hping_rand());
 
-	tcp->th_off	= src_thoff + (tcp_opt_size >> 2);
-	tcp->th_win	= htons(src_winsize);
-	tcp->th_flags	= tcp_th_flags;
+	tcp->th_off	= cfg.src_thoff + (tcp_opt_size >> 2);
+	tcp->th_win	= htons(cfg.src_winsize);
+	tcp->th_flags	= cfg.tcp_th_flags;
 
 	/* tcp timestamp option */
-	if (opt_tcp_timestamp) {
-		__u32 randts = rand() ^ (rand() << 16);
+	if (cfg.opt_tcp_timestamp) {
+		__u32 randts = hping_rand();
 		tstamp[0] = tstamp[1] = 1; /* NOOP */
 		tstamp[2] = 8;
 		tstamp[3] = 10; /* 10 bytes, kind+len+T1+T2 */
@@ -75,7 +76,7 @@ void send_tcp(void)
 	}
 
 	/* data */
-	data_handler(data, data_size);
+	data_handler(data, cfg.data_size);
 
 	/* compute checksum */
 #ifdef STUPID_SOLARIS_CHECKSUM_BUG
@@ -86,16 +87,17 @@ void send_tcp(void)
 #endif
 
 	/* adds this pkt in delaytable */
-	delaytable_add(sequence, src_port, time(NULL), get_usec(), S_SENT);
+	delaytable_add(ctx.sequence, ctx.src_port, S_SENT);
 
 	/* send packet */
-	send_ip_handler(packet+PSEUDOHDR_SIZE, packet_size);
+	rc = send_ip_handler(packet+PSEUDOHDR_SIZE, packet_size);
 	free(packet);
 
-	sequence++;	/* next sequence number */
-	if (!opt_keepstill)
-		src_port = (sequence + initsport) % 65536;
+	ctx.sequence++;	/* next sequence number */
+	if (!cfg.opt_keepstill)
+		ctx.src_port = (ctx.sequence + cfg.initsport) % 65536;
 
-	if (opt_force_incdport)
-		dst_port++;
+	if (cfg.opt_force_incdport)
+		cfg.dst_port++;
+	return rc;
 }

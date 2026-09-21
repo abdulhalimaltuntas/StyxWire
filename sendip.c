@@ -21,9 +21,14 @@
 #include "hping2.h"
 #include "globals.h"
 
-void send_ip (char* src, char *dst, char *data, unsigned int datalen,
+/* Build the IP header around 'data' and write the datagram to the raw
+ * socket. Returns 0 on success, -1 when it could not be sent (the caller
+ * stops: continuing would only repeat the failure). With --rand-dest and
+ * --rand-source send errors are expected (unroutable addresses) and
+ * ignored. */
+int send_ip (char* src, char *dst, char *data, unsigned int datalen,
 		int more_fragments, unsigned short fragoff, char *options,
-		char optlen)
+		unsigned int optlen)
 {
 	char		*packet;
 	int		result,
@@ -33,7 +38,7 @@ void send_ip (char* src, char *dst, char *data, unsigned int datalen,
 	packetsize = IPHDR_SIZE + optlen + datalen;
 	if ( (packet = malloc(packetsize)) == NULL) {
 		perror("[send_ip] malloc()");
-		return;
+		return -1;
 	}
 
 	memset(packet, 0, packetsize);
@@ -46,7 +51,7 @@ void send_ip (char* src, char *dst, char *data, unsigned int datalen,
 	/* build ip header */
 	ip->version	= 4;
 	ip->ihl		= (IPHDR_SIZE + optlen + 3) >> 2;
-	ip->tos		= ip_tos;
+	ip->tos		= cfg.ip_tos;
 
 #if defined OSTYPE_DARWIN || defined OSTYPE_FREEBSD || defined OSTYPE_NETBSD || defined OSTYPE_BSDI
 /* FreeBSD */
@@ -58,19 +63,19 @@ void send_ip (char* src, char *dst, char *data, unsigned int datalen,
 	ip->tot_len	= htons(packetsize);
 #endif
 
-	if (!opt_fragment)
+	if (!cfg.opt_fragment)
 	{
-		ip->id		= (src_id == -1) ?
-			htons((unsigned short) rand()) :
-			htons((unsigned short) src_id);
+		ip->id		= (cfg.src_id == -1) ?
+			htons((unsigned short) hping_rand()) :
+			htons((unsigned short) cfg.src_id);
 	}
 	else /* if you need fragmentation id must not be randomic */
 	{
 		/* FIXME: when frag. enabled sendip_handler shold inc. ip->id */
 		/*        for every frame sent */
-		ip->id		= (src_id == -1) ?
+		ip->id		= (cfg.src_id == -1) ?
 			htons(getpid() & 255) :
-			htons((unsigned short) src_id);
+			htons((unsigned short) cfg.src_id);
 	}
 
 #if defined OSTYPE_DARWIN || defined OSTYPE_FREEBSD || defined OSTYPE_NETBSD | defined OSTYPE_BSDI
@@ -85,10 +90,10 @@ void send_ip (char* src, char *dst, char *data, unsigned int datalen,
 	ip->frag_off	|= htons(fragoff >> 3); /* shift three flags bit */
 #endif
 
-	ip->ttl		= src_ttl;
-	if (opt_rawipmode)	ip->protocol = raw_ip_protocol;
-	else if	(opt_icmpmode)	ip->protocol = 1;	/* icmp */
-	else if (opt_udpmode)	ip->protocol = 17;	/* udp  */
+	ip->ttl		= cfg.src_ttl;
+	if (cfg.opt_rawipmode)	ip->protocol = cfg.raw_ip_protocol;
+	else if	(cfg.opt_icmpmode)	ip->protocol = 1;	/* icmp */
+	else if (cfg.opt_udpmode)	ip->protocol = 17;	/* udp  */
 	else			ip->protocol = 6;	/* tcp  */
 	ip->check	= 0; /* always computed by the kernel */
 
@@ -99,7 +104,7 @@ void send_ip (char* src, char *dst, char *data, unsigned int datalen,
 	/* copies data */
 	memcpy(packet + IPHDR_SIZE + optlen, data, datalen);
 	
-    if (opt_debug == TRUE)
+    if (cfg.opt_debug == TRUE)
     {
         unsigned int i;
 
@@ -107,21 +112,16 @@ void send_ip (char* src, char *dst, char *data, unsigned int datalen,
             printf("%.2X ", packet[i]&255);
         printf("\n");
     }
-	result = sendto(sockraw, packet, packetsize, 0,
-		(struct sockaddr*)&remote, sizeof(remote));
-	
-	if (result == -1 && errno != EINTR && !opt_rand_dest && !opt_rand_source) {
+	result = sendto(ctx.sockraw, packet, packetsize, 0,
+		(struct sockaddr*)&ctx.remote, sizeof(ctx.remote));
+	free(packet);
+	if (result == -1 && errno != EINTR && !cfg.opt_rand_dest && !cfg.opt_rand_source) {
 		perror("[send_ip] sendto");
-		if (close(sockraw) == -1)
-			perror("[ipsender] close(sockraw)");
-		if (close_pcap() == -1)
-			printf("[ipsender] close_pcap failed\n");
-		exit(1);
+		return -1;
 	}
 
-	free(packet);
-
 	/* inc packet id for safe protocol */
-	if (opt_safe && !eof_reached)
-		src_id++;
+	if (cfg.opt_safe && !ctx.eof_reached)
+		cfg.src_id++;
+	return 0;
 }

@@ -1,0 +1,52 @@
+# Continuous integration for hping3.
+#
+# Every job builds from a clean checkout with warnings as errors and runs
+# the offline test-suite (no root, no network traffic). The matrix covers
+# GCC and Clang with Tcl scripting enabled and disabled; one extra job
+# runs the suite under AddressSanitizer/UndefinedBehaviorSanitizer.
+#
+# NOTE: this workflow was written together with the phase 1 changes and
+# has not been executed on GitHub yet (see docs/ASAMA1-RAPORU.md).
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        cc: [gcc, clang]
+        tcl: [with-tcl, no-tcl]
+    steps:
+      - uses: actions/checkout@v4
+      - name: install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpcap-dev tcl-dev pkg-config ${{ matrix.cc }}
+      - name: configure
+        run: CC=${{ matrix.cc }} ./configure --${{ matrix.tcl }}
+      - name: build (warnings are errors)
+        run: make -j"$(nproc)" WERROR=1
+      - name: help and version need no privileges
+        run: ./hping3 --help >/dev/null && ./hping3 --version
+      - name: test-suite
+        run: make check WERROR=1
+      - name: staged install
+        run: make install DESTDIR="$PWD/stage" && find stage -type f -o -type l | sort
+
+  sanitizers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpcap-dev tcl-dev pkg-config clang
+      - name: configure
+        run: CC=clang ./configure --with-tcl
+      - name: test-suite under ASan/UBSan
+        run: make -j"$(nproc)" check SANITIZE=1 WERROR=1

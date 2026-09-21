@@ -18,6 +18,8 @@
 #include <arpa/inet.h>
 #include <string.h>
 
+#include "hping2.h" /* strlcpy() prototype */
+
 char *get_hostname(char* addr)
 {
 	static char answer[1024];
@@ -34,7 +36,7 @@ char *get_hostname(char* addr)
 	if (!strcmp(addr, lastreq))
 		return last_answerp;
 
-	strncpy(lastreq, addr, 1024);
+	strlcpy(lastreq, addr, sizeof(lastreq));
 	inet_aton(addr, &naddr);
 	he = gethostbyaddr((char*)&naddr, 4, AF_INET);
 
@@ -43,7 +45,7 @@ char *get_hostname(char* addr)
 		return NULL;
 	}
 
-	strncpy(answer, he->h_name, 1024);
+	strlcpy(answer, he->h_name, sizeof(answer));
 	last_answerp = answer;
 
 	return answer;

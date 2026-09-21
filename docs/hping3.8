@@ -178,7 +178,7 @@ hping2 to perform idle/spoofing scanning you should tune this option, see
 for more information.
 .TP
 .I --fast
-Alias for -i u10000. Hping will send 10 packets for second.
+Alias for -i u100000. Hping will send 10 packets for second.
 .TP
 .I --faster
 Alias for -i u1. Faster then --fast ;) (but not as fast as your computer can send packets due to the signal-driven design).
@@ -229,7 +229,7 @@ Unbind CTRL+Z so you will able to stop hping2.
 Beep for every matching received packet (but not for ICMP errors).
 .SH PROTOCOL SELECTION
 Default protocol is TCP, by default hping2 will send tcp headers to target
-host's port 0 with a winsize of 64 without any tcp flag on. Often this
+host's port 0 with a winsize of 512 without any tcp flag on. Often this
 is the best way to do an 'hide ping', useful when target is behind
 a firewall that drop ICMP. Moreover a tcp null-flag to port 0 has a good
 probability of not being logged.
@@ -469,7 +469,7 @@ keep still source port, see
 for more information.
 .TP
 .I -w --win
-Set TCP window size. Default is 64.
+Set TCP window size. Default is 512.
 .TP
 .I -O --tcpoff
 Set fake tcp data offset. Normal data offset is tcphdrlen / 4.

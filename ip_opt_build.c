@@ -27,35 +27,35 @@ unsigned char ip_opt_build(char* ip_opt)
 
     memset(ip_opt, 1, 40);
 
-    if (opt_lsrr)
+    if (cfg.opt_lsrr)
     {
-        if (lsr_length<=39)
+        if (cfg.lsr_length<=39)
         {
-            memcpy(ip_opt, &lsr, lsr_length);
-            optlen += lsr_length;
+            memcpy(ip_opt, &cfg.lsr, cfg.lsr_length);
+            optlen += cfg.lsr_length;
         }
         else
         {
             printf("Warning: loose source route is too long, discarding it");
-            opt_lsrr=0;
+            cfg.opt_lsrr=0;
         }
     }
 
-    if (opt_ssrr)
+    if (cfg.opt_ssrr)
     {
-        if (ssr_length+optlen<=39)
+        if (cfg.ssr_length+optlen<=39)
         {
-            memcpy(ip_opt + optlen, &ssr, ssr_length);
-            optlen += ssr_length;
+            memcpy(ip_opt + optlen, &cfg.ssr, cfg.ssr_length);
+            optlen += cfg.ssr_length;
         }
         else
         {
             printf("Warning: strict source route is too long, discarding it");
-            opt_ssrr=0;
+            cfg.opt_ssrr=0;
         }
     }
 
-	if (opt_rroute)
+	if (cfg.opt_rroute)
 	{
         if (optlen<=33)
         {
@@ -69,7 +69,7 @@ unsigned char ip_opt_build(char* ip_opt)
         else
         {
             printf("Warning: no room for record route, discarding option\n");
-            opt_rroute=0;
+            cfg.opt_rroute=0;
         }
 	}
 

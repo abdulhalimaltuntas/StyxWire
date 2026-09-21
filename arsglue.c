@@ -1,34 +1,43 @@
 /* Glue between hping and the ars engine */
 
-/* $Id: arsglue.c,v 1.2 2003/09/01 00:22:06 antirez Exp $ */
-
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
+#include <unistd.h>
 #include "ars.h"
+#include "hping2.h"
 
-/* Send the APD described packet {s} */
-void hping_ars_send(char *apd)
+/* --apd-send: build, compile and send the APD described packet.
+ * Returns 0 when the packet was sent, -1 on error (message printed). */
+int hping_ars_send(const char *apd)
 {
 	struct ars_packet p;
-	int s;
+	char *copy;
+	int s, rc = -1;
 
 	ars_init(&p);
+	copy = strdup(apd); /* ars_d_build() parses in place */
+	if (copy == NULL) {
+		fprintf(stderr, "APD error: out of memory\n");
+		return -1;
+	}
 	s = ars_open_rawsocket(&p);
 	if (s == -ARS_ERROR) {
 		perror("Opening raw socket");
-		exit(1);
+		free(copy);
+		ars_destroy(&p);
+		return -1;
 	}
-	if (ars_d_build(&p, apd) != -ARS_OK) {
+	if (ars_d_build(&p, copy) != -ARS_OK)
 		fprintf(stderr, "APD error: %s\n", p.p_error);
-		exit(1);
-	}
-	if (ars_compile(&p) != -ARS_OK) {
+	else if (ars_compile(&p) != -ARS_OK)
 		fprintf(stderr, "APD error compiling: %s\n", p.p_error);
-		exit(1);
-	}
-	if (ars_send(s, &p, NULL, 0) != -ARS_OK) {
+	else if (ars_send(s, &p, NULL, 0) != -ARS_OK)
 		perror("Sending the packet");
-		exit(1);
-	}
-	exit(0);
+	else
+		rc = 0;
+	close(s);
+	free(copy);
+	ars_destroy(&p);
+	return rc;
 }

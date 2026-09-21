@@ -46,93 +46,118 @@
 #include "hping2.h"
 #include "globals.h"
 
-/* ripped from ping */
+/* ripped from ping, bounds checking added.
+ *
+ * 'buf' points to an IP header whose IHL bytes are known to be present
+ * (wait_packet() checks ihl*4 against the captured length before calling
+ * this function). The option area is therefore at most 40 bytes long and
+ * every access is kept inside it. */
 
 void display_ipopt(char* buf)
 {
-int i,j;
-unsigned long l;
-static int old_rrlen;
-static char old_rr[MAX_IPOPTLEN];
-unsigned char* cp;
-int hlen;
-struct myiphdr *ip;
-struct in_addr in;
+	int i, j, optlen, hlen, naddr;
+	unsigned long l;
+	static int old_rrlen;
+	static char old_rr[MAX_IPOPTLEN];
+	unsigned char *cp, *addr;
+	struct myiphdr ip;
+	struct in_addr in;
 
+	memcpy(&ip, buf, sizeof(ip)); /* alignment safe copy */
+	hlen = ip.ihl * 4;
+	if (hlen <= (int)sizeof(struct myiphdr))
+		return; /* no options */
+	if (hlen > (int)sizeof(struct myiphdr) + MAX_IPOPTLEN)
+		hlen = sizeof(struct myiphdr) + MAX_IPOPTLEN;
 
-	ip = (struct myiphdr *)buf;
-	hlen = ip->ihl * 4;
-	
-	cp = (u_char *)buf + sizeof(struct myiphdr);
+	cp = (unsigned char *)buf + sizeof(struct myiphdr);
+	hlen -= sizeof(struct myiphdr); /* bytes of option area left */
 
-	for (; hlen > (int)sizeof(struct myiphdr); --hlen, ++cp)
+	while (hlen > 0) {
 		switch (*cp) {
 		case IPOPT_EOL:
 			hlen = 0;
 			break;
-		case IPOPT_LSRR:
-			(void)printf("LSRR: ");
-			hlen -= 2;
-			j = *++cp;
-			++cp;
-			if (j > IPOPT_MINOFF)
-				for (;;) {
-					l = *++cp;
-					l = (l<<8) + *++cp;
-					l = (l<<8) + *++cp;
-					l = (l<<8) + *++cp;
-				in.s_addr=htonl(l);
-				printf("\t%s",inet_ntoa(in));
-				hlen -= 4;
-				j -= 4;
-				if (j <= IPOPT_MINOFF)
-					break;
-				(void)putchar('\n');
-			}
-			break;
-		case IPOPT_RR:
-			j = *++cp;		/* get length */
-			i = *++cp;		/* and pointer */
-			hlen -= 2;
-			if (i > j)
-				i = j;
-			i -= IPOPT_MINOFF;
-			if (i <= 0)
-				continue;
-			if (i == old_rrlen
-			    && cp == (u_char *)buf + sizeof(struct myiphdr) + 2
-			    && !memcmp((char *)cp, old_rr, i)) {
-				(void)printf("\t(same route)\n");
-				i = ((i + 3) / 4) * 4;
-				hlen -= i;
-				cp += i;
-				break;
-			}
-			old_rrlen = i;
-			memcpy(old_rr, cp, i);
-			(void)printf("RR: ");
-			for (;;) {
-				l = *++cp;
-				l = (l<<8) + *++cp;
-				l = (l<<8) + *++cp;
-				l = (l<<8) + *++cp;
-				in.s_addr=htonl(l);
-				printf("\t%s",inet_ntoa(in));
-				hlen -= 4;
-				i -= 4;
-				if (i <= 0)
-					break;
-				(void)putchar('\n');
-			}
-			putchar('\n');
-			
-			break;
 		case IPOPT_NOP:
 			(void)printf("NOP\n");
+			cp++; hlen--;
 			break;
 		default:
-			(void)printf("unknown option %x\n", *cp);
+			/* Every other option has a length byte, which must
+			 * cover at least itself and the type byte and must
+			 * not exceed the option area. */
+			if (hlen < 2 || cp[1] < 2 || cp[1] > hlen) {
+				(void)printf("[|ipopt]\n");
+				hlen = 0;
+				break;
+			}
+			optlen = cp[1];
+			switch (*cp) {
+			case IPOPT_LSRR:
+			case IPOPT_SSRR:
+				(void)printf(*cp == IPOPT_LSRR ? "LSRR: " : "SSRR: ");
+				/* type, len, ptr, then 4-byte addresses */
+				naddr = (optlen - 3) / 4;
+				addr = cp + 3;
+				for (i = 0; i < naddr; i++) {
+					l = ((unsigned long)addr[0] << 24) |
+					    ((unsigned long)addr[1] << 16) |
+					    ((unsigned long)addr[2] << 8) |
+					     (unsigned long)addr[3];
+					in.s_addr = htonl(l);
+					printf("\t%s", inet_ntoa(in));
+					if (i + 1 < naddr)
+						(void)putchar('\n');
+					addr += 4;
+				}
+				(void)putchar('\n');
+				break;
+			case IPOPT_RR:
+				j = optlen;		/* length */
+				i = optlen >= 3 ? cp[2] : 0; /* pointer */
+				if (i > j)
+					i = j;
+				i -= IPOPT_MINOFF;	/* bytes of addresses recorded */
+				if (i <= 0)
+					break;
+				/* ceil(i/4) addresses, but never beyond
+				 * the option itself */
+				naddr = (i + 3) / 4;
+				if (naddr > (optlen - 3) / 4)
+					naddr = (optlen - 3) / 4;
+				if (naddr <= 0)
+					break;
+				i = naddr * 4;
+				addr = cp + 3;
+				if (i == old_rrlen
+				    && cp == (unsigned char *)buf + sizeof(struct myiphdr)
+				    && !memcmp((char *)addr, old_rr, i)) {
+					(void)printf("\t(same route)\n");
+					break;
+				}
+				old_rrlen = i;
+				memcpy(old_rr, addr, i);
+				(void)printf("RR: ");
+				for (j = 0; j < naddr; j++) {
+					l = ((unsigned long)addr[0] << 24) |
+					    ((unsigned long)addr[1] << 16) |
+					    ((unsigned long)addr[2] << 8) |
+					     (unsigned long)addr[3];
+					in.s_addr = htonl(l);
+					printf("\t%s", inet_ntoa(in));
+					if (j + 1 < naddr)
+						(void)putchar('\n');
+					addr += 4;
+				}
+				putchar('\n');
+				break;
+			default:
+				(void)printf("unknown option %x\n", *cp);
+				break;
+			}
+			cp += optlen;
+			hlen -= optlen;
 			break;
 		}
-
+	}
 }

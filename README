@@ -51,39 +51,34 @@ DOCUMENTATION
 
 	Make sure to check the page at http://wiki.hping.org/34
 
-DOWNLOAD
+BUILDING AND TESTING
 
-	The hping3 primary download site is the following:
+	$ ./configure          (./configure --help lists the options)
+	$ make
+	$ make check           offline test-suite: no root, no network traffic
+	# make install         or: make install DESTDIR=/some/stage
 
-		http://www.hping.org
+	See the INSTALL file for the details (Tcl on/off, staged
+	installation, sanitizer builds, cross compiling notes).
 
-	----------------------------------------------------------------
-	How to get the hping3 source code from the anonymous CVS server
-	----------------------------------------------------------------
-
-	$ cvs -d :pserver:anonymous@cvs.hping2.sourceforge.net:/cvsroot/hping2 login   
-
-	CVS will ask for the password, just press enter, no password is required
-
-	than type the following to download the full source code.
-
-	$ cvs -z8 -d :pserver:anonymous@cvs.hping2.sourceforge.net:/cvsroot/hping2 checkout hping3s
-
-	-----------------------------------
-	How to update your source code tree
-	-----------------------------------
-
-	change the current directory to /somewhere/hping2, than just type:
-
-	$ cvs update
+	Status of the current work on this tree, the list of known
+	problems and the roadmap: docs/ASAMA1-RAPORU.md (in Turkish).
 
 REQUIREMENTS
 
-	A supported unix-like OS, gcc, root access.
+	A supported unix-like OS (Linux is the tested one), a C compiler,
+	GNU make, libpcap with headers. Root access is needed to run
+	hping3, not to build or test it.
 
-	Libpcap.
+	Tcl 8.6 (with headers) is optional but strongly suggested.
 
-	Tcl/Tk is optional but strongly suggested.
+HISTORICAL NOTES
+
+	The original source was hosted on SourceForge CVS
+	(cvs.hping2.sourceforge.net, module hping3s) and released at
+	http://www.hping.org; those services are not maintained by this
+	tree. The web/wiki links in the documentation are kept as
+	historical references.
 
 INSTALLATION
 

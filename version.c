@@ -24,6 +24,5 @@ void show_version(void)
 #else
 	printf("NO TCL scripting support compiled in\n");
 #endif
-	exit(0);
 }
 

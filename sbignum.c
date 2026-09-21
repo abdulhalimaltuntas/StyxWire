@@ -492,7 +492,7 @@ int mpz_lshift(mpz_ptr r, mpz_ptr z, u_int32_t i)
 do { \
 	int32_t j; \
 	for (j = (z)->l-1; j >= 0; j--) { \
-		(z)->d[j+1] |= ((z)->d[j] & (1<<(ATOMBITS-1))) >> (ATOMBITS-1);\
+		(z)->d[j+1] |= ((z)->d[j] & ((mpz_atom_t)1<<(ATOMBITS-1))) >> (ATOMBITS-1);\
 		(z)->d[j] <<= 1; \
 	} \
 	if ((z)->d[(z)->l]) \
@@ -505,7 +505,7 @@ do { \
 do { \
 	int32_t j; \
 	for (j = (z)->l-1; j >= 0; j--) { \
-		(z)->d[j+1] |= ((z)->d[j] & (1<<(ATOMBITS-1))) >> (ATOMBITS-1);\
+		(z)->d[j+1] |= ((z)->d[j] & ((mpz_atom_t)1<<(ATOMBITS-1))) >> (ATOMBITS-1);\
 		(z)->d[j] <<= 1; \
 	} \
 	(z)->d[0] |= b; \

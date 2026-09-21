@@ -25,7 +25,7 @@ int if_promisc_on(int s)
 {
 	struct ifreq ifr;
 
-	strlcpy(ifr.ifr_name, ifname, IFNAMSIZ);
+	strlcpy(ifr.ifr_name, cfg.ifname, IFNAMSIZ);
 	if ( ioctl(s, SIOCGIFFLAGS, &ifr) == -1) {
 		perror("[if_prommisc_on] ioctl(SIOCGIFFLAGS)");
 		return -1;
@@ -45,7 +45,7 @@ int if_promisc_off(int s)
 {
 	struct ifreq ifr;
 
-	strlcpy(ifr.ifr_name, ifname, IFNAMSIZ);
+	strlcpy(ifr.ifr_name, cfg.ifname, IFNAMSIZ);
 	if ( ioctl(s, SIOCGIFFLAGS, &ifr) == -1) {
 		perror("[if_promisc_off] ioctl(SIOCGIFFLAGS)");
 		return -1;

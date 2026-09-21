@@ -1,28 +1,39 @@
-# $smu-mark$ 
-# $name: Makefile.in$ 
-# $author: Salvatore Sanfilippo 'antirez'$ 
-# $copyright: Copyright (C) 1999 by Salvatore Sanfilippo$ 
-# $license: This software is under GPL version 2 of license$ 
-# $date: Sun Jul 25 17:56:15 MET DST 1999$ 
-# $rev: 3$ 
+# Makefile.in for hping3.
+#
+# ./configure prepends the configuration variables (CC, CFLAGS, PCAP_LIBS,
+# USE_TCL, prefix, sbindir, mandir, ...) to this file and writes Makefile.
+# Everything below only refers to those variables.
+#
+# Useful invocations:
+#   make                      build hping3
+#   make check                build and run the offline test-suite (no root)
+#   make check SANITIZE=1     same, with ASan/UBSan (run "make clean" first)
+#   make WERROR=1             treat warnings as errors
+#   make install DESTDIR=/tmp/stage   staged installation
+#
+# Copyright (C) 1999 by Salvatore Sanfilippo, GPL version 2.
 
-CC= gcc
-AR=/usr/bin/ar
-RANLIB=/usr/bin/ranlib
-CCOPT= -O2 -Wall @PCAP_INCLUDE@ @TCL_INC@ @USE_TCL@
-DEBUG= -g
-#uncomment the following if you need libpcap based build under linux
-#(not raccomanded)
-COMPILE_TIME=
-INSTALL_MANPATH=@MANPATH@
-@PCAP@
+# Optional knobs
+SANITIZE_FLAGS_1 = -fsanitize=address,undefined -fno-omit-frame-pointer -O1
+SANITIZE_FLAGS_ =
+SANITIZE_FLAGS = $(SANITIZE_FLAGS_$(SANITIZE))
+WERROR_FLAGS_1 = -Werror
+WERROR_FLAGS_ =
+WERROR_FLAGS = $(WERROR_FLAGS_$(WERROR))
+
+ALL_CPPFLAGS = $(CPPFLAGS) $(DEFS) $(PCAP_CFLAGS) $(TCL_INC) $(USE_TCL)
+ALL_CFLAGS = $(CFLAGS) $(WERROR_FLAGS) $(SANITIZE_FLAGS)
+ALL_LDFLAGS = $(LDFLAGS) $(SANITIZE_FLAGS)
+ALL_LDLIBS = $(PCAP_LIBS) $(SOLARISLIB) $(TCL_LIB) $(LDLIBS)
+
+INSTALL = install
 
 ARSOBJ = ars.o apd.o split.o rapd.o
 
-OBJ=	main.o getifname.o getlhs.o \
+OBJ=	main.o globals.o getifname.o getlhs.o \
 	parseoptions.o datafiller.o \
 	datahandler.o gethostname.o \
-	binding.o getusec.o opensockraw.o \
+	binding.o clock.o opensockraw.o \
 	logicmp.o waitpacket.o resolve.o \
 	sendip.o sendicmp.o sendudp.o \
 	sendtcp.o cksum.o statistics.o \
@@ -32,61 +43,118 @@ OBJ=	main.o getifname.o getlhs.o \
 	relid.o sendip_handler.o \
 	libpcap_stuff.o memlockall.o memunlockall.o \
 	memlock.o memunlock.o ip_opt_build.o \
-	display_ipopt.o sendrawip.o signal.o send.o \
-	strlcpy.o arsglue.o random.o scan.o \
+	display_ipopt.o sendrawip.o send.o \
+	strlcpy.o arsglue.o random.o scan.o lifecycle.o \
 	hstring.o script.o interface.o \
 	adbuf.o hex.o apdutils.o sbignum.o \
 	sbignum-tables.o $(ARSOBJ)
 
-all: .depend hping3
+all: hping3
+
+hping3: byteorder.h systype.h $(OBJ)
+	$(CC) $(ALL_CFLAGS) $(ALL_LDFLAGS) -o hping3 $(OBJ) $(ALL_LDLIBS)
+	@echo
+	@echo "hping3 built. Try \`make check', \`make strip', \`make install'"
+
+hping3-static: byteorder.h systype.h $(OBJ)
+	$(CC) -static $(ALL_CFLAGS) $(ALL_LDFLAGS) -o hping3-static $(OBJ) $(ALL_LDLIBS) -ldl
+
+libars.a: $(ARSOBJ) adbuf.o hex.o hstring.o strlcpy.o
+	$(AR) rc $@ $(ARSOBJ) adbuf.o hex.o hstring.o strlcpy.o
+	$(RANLIB) $@
+
+byteorder.h systype.h:
+	@echo "$@ is missing: run ./configure first" >&2; exit 1
+
+.c.o:
+	$(CC) $(ALL_CPPFLAGS) $(ALL_CFLAGS) -c $<
 
 dep: .depend
 .depend:
 	@echo Making dependences
-	@$(CC) -MM *.c > .depend
+	@$(CC) $(ALL_CPPFLAGS) -MM *.c > .depend
 
-libars.a: $(ARSOBJ)
-	$(AR) rc $@ $^
-	$(RANLIB) $@
+# ---------------------------------------------------------------------------
+# tests (offline: no root, no network traffic, no capture devices)
+# ---------------------------------------------------------------------------
+# Every test binary links the real hping objects, except:
+#  - main.o (the tests have their own main(); the state objects are in
+#    globals.o)
+#  - sendip_handler.o is replaced by tests/stub_send.o (captures packets
+#    instead of writing them to a raw socket)
+#  - the object of the source a test #includes to reach static functions
+TEST_COMMON_OBJ = $(filter-out main.o sendip_handler.o waitpacket.o scan.o script.o,$(OBJ))
+TEST_LINK = tests/stub_send.o $(TEST_COMMON_OBJ)
+TEST_BINS = tests/test_core tests/test_waitpacket tests/test_scan tests/test_loop tests/test_parse
+TEST_BINS_TCL_-DUSE_TCL = tests/test_script
+TEST_BINS_TCL_ =
+TEST_BINS_TCL = $(TEST_BINS_TCL_$(USE_TCL))
+TEST_CC = $(CC) $(ALL_CPPFLAGS) $(ALL_CFLAGS) $(ALL_LDFLAGS) -I.
 
-hping3: byteorder.h $(OBJ)
-	$(CC) -o hping3 $(CCOPT) $(DEBUG) $(OBJ) -L/usr/local/lib $(PCAP) @SOLARISLIB@ @TCL_LIB@
-	@echo
-	./hping3 -v
-	@echo "use \`make strip' to strip hping3 binary"
-	@echo "use \`make install' to install hping3"
+tests/stub_send.o: tests/stub_send.c tests/stub_send.h hping2.h globals.h
+	$(CC) $(ALL_CPPFLAGS) $(ALL_CFLAGS) -I. -c -o $@ tests/stub_send.c
 
-hping3-static: byteorder.h $(OBJ)
-	$(CC) -static -o hping3-static $(CCOPT) $(DEBUG) $(OBJ) -L/usr/local/lib $(PCAP) @SOLARISLIB@ @TCL_LIB@ -ldl
+tests/test_core: tests/test_core.c tests/testutil.h $(TEST_LINK) waitpacket.o scan.o script.o
+	$(TEST_CC) -o $@ tests/test_core.c $(TEST_LINK) waitpacket.o scan.o script.o $(ALL_LDLIBS)
 
-byteorder.h:
-	./configure
+tests/test_loop: tests/test_loop.c tests/testutil.h tests/stub_send.h $(TEST_LINK) waitpacket.o scan.o script.o
+	$(TEST_CC) -o $@ tests/test_loop.c $(TEST_LINK) waitpacket.o scan.o script.o $(ALL_LDLIBS)
 
-.c.o:
-	$(CC) -c $(CCOPT) $(DEBUG) $(COMPILE_TIME) $<
+tests/test_parse: tests/test_parse.c tests/testutil.h $(TEST_LINK) waitpacket.o scan.o script.o
+	$(TEST_CC) -o $@ tests/test_parse.c $(TEST_LINK) waitpacket.o scan.o script.o $(ALL_LDLIBS)
 
+tests/test_waitpacket: tests/test_waitpacket.c tests/testutil.h waitpacket.c $(TEST_LINK) scan.o script.o
+	$(TEST_CC) -o $@ tests/test_waitpacket.c $(TEST_LINK) scan.o script.o $(ALL_LDLIBS)
+
+tests/test_scan: tests/test_scan.c tests/testutil.h scan.c $(TEST_LINK) waitpacket.o script.o
+	$(TEST_CC) -o $@ tests/test_scan.c $(TEST_LINK) waitpacket.o script.o $(ALL_LDLIBS)
+
+tests/test_script: tests/test_script.c tests/testutil.h script.c $(TEST_LINK) waitpacket.o scan.o
+	$(TEST_CC) -o $@ tests/test_script.c $(TEST_LINK) waitpacket.o scan.o $(ALL_LDLIBS)
+
+# links against the archive only: no hping object (tests/libars.sh)
+tests/libars_link: tests/libars_link.c libars.a
+	$(CC) $(ALL_CPPFLAGS) $(ALL_CFLAGS) $(ALL_LDFLAGS) -I. -o $@ tests/libars_link.c libars.a
+
+check: hping3 $(TEST_BINS) $(TEST_BINS_TCL)
+	@sh tests/run.sh $(TEST_BINS) $(TEST_BINS_TCL)
+
+# ---------------------------------------------------------------------------
+# cleaning
+# ---------------------------------------------------------------------------
 clean:
-	rm -rf hping3 *.o libars.a
+	rm -rf hping3 hping3-static *.o libars.a tests/*.o $(TEST_BINS) tests/test_script tests/test_loop tests/test_parse tests/libars_link
 
-distclean:
-	rm -rf hping3 *.o byteorder byteorder.h systype.h Makefile libars.a .depend
+distclean: clean
+	rm -rf byteorder byteorder.h systype.h Makefile .depend .configure-tmp
 
+# ---------------------------------------------------------------------------
+# installation (honours DESTDIR, prefix, sbindir, mandir, datadir)
+# ---------------------------------------------------------------------------
 install: hping3
-	cp -f hping3 /usr/sbin/
-	chmod 755 /usr/sbin/hping3
-	ln -s /usr/sbin/hping3 /usr/sbin/hping
-	ln -s /usr/sbin/hping3 /usr/sbin/hping2
-	@if [ -d ${INSTALL_MANPATH}/man8 ]; then \
-		cp ./docs/hping3.8 ${INSTALL_MANPATH}/man8; \
-		chmod 644 ${INSTALL_MANPATH}/man8/hping3.8; \
-	else \
-		echo "@@@@@@ WARNING @@@@@@"; \
-		echo "Can't install the man page: ${INSTALL_MANPATH}/man8 does not exist"; \
+	$(INSTALL) -d "$(DESTDIR)$(sbindir)"
+	$(INSTALL) -m 755 hping3 "$(DESTDIR)$(sbindir)/hping3"
+	ln -sf hping3 "$(DESTDIR)$(sbindir)/hping"
+	ln -sf hping3 "$(DESTDIR)$(sbindir)/hping2"
+	$(INSTALL) -d "$(DESTDIR)$(mandir)/man8"
+	$(INSTALL) -m 644 docs/hping3.8 "$(DESTDIR)$(mandir)/man8/hping3.8"
+	@if [ -n "$(USE_TCL)" ]; then \
+		$(INSTALL) -d "$(DESTDIR)$(datadir)/hping3/lib"; \
+		for f in lib/*.htcl; do \
+			$(INSTALL) -m 644 "$$f" "$(DESTDIR)$(datadir)/hping3/lib/"; \
+		done; \
 	fi
+
+uninstall:
+	rm -f "$(DESTDIR)$(sbindir)/hping3" "$(DESTDIR)$(sbindir)/hping" "$(DESTDIR)$(sbindir)/hping2"
+	rm -f "$(DESTDIR)$(mandir)/man8/hping3.8"
+	rm -rf "$(DESTDIR)$(datadir)/hping3"
 
 strip: hping3
 	@ls -l ./hping3
 	strip hping3
 	@ls -l ./hping3
 
-include .depend
+.PHONY: all dep check clean distclean install uninstall strip
+
+-include .depend

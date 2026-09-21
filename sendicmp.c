@@ -25,89 +25,101 @@
 
 static int _icmp_seq = 0;
 
-void send_icmp_echo(void);
-void send_icmp_other(void);
-void send_icmp_timestamp(void);
-void send_icmp_address(void);
+int send_icmp_echo(void);
+int send_icmp_other(void);
+int send_icmp_timestamp(void);
+int send_icmp_address(void);
 
-void send_icmp(void)
+/* Non zero when 'type' is one of the ICMP types hping knows how to build
+ * (others need --force-icmp). parse_options() uses it too. */
+int icmp_type_supported(int type)
 {
-	switch(opt_icmptype)
+	switch(type) {
+	case ICMP_ECHO: case ICMP_ECHOREPLY:
+	case ICMP_DEST_UNREACH: case ICMP_SOURCE_QUENCH:
+	case ICMP_REDIRECT: case ICMP_TIME_EXCEEDED:
+	case ICMP_TIMESTAMP: case ICMP_TIMESTAMPREPLY:
+	case ICMP_ADDRESS: case ICMP_ADDRESSREPLY:
+		return 1;
+	}
+	return 0;
+}
+
+int send_icmp(void)
+{
+	switch(cfg.opt_icmptype)
 	{
 		case ICMP_ECHO:			/* type 8 */
 		case ICMP_ECHOREPLY:		/* type 0 */
-			send_icmp_echo();
-			break;
+			return send_icmp_echo();
 		case ICMP_DEST_UNREACH:		/* type 3 */
 		case ICMP_SOURCE_QUENCH:	/* type 4 */
 		case ICMP_REDIRECT:		/* type 5 */
 		case ICMP_TIME_EXCEEDED:	/* type 11 */
-			send_icmp_other();
-			break;
+			return send_icmp_other();
 		case ICMP_TIMESTAMP:
 		case ICMP_TIMESTAMPREPLY:
-			send_icmp_timestamp();
-			break;
+			return send_icmp_timestamp();
 		case ICMP_ADDRESS:
 		case ICMP_ADDRESSREPLY:
-			send_icmp_address();
-			break;
+			return send_icmp_address();
 		default:
-			if (opt_force_icmp) {
-			    send_icmp_other();
-			    break;
-			} else {
-			    printf("[send_icmp] Unsupported icmp type!\n");
-			    exit(1);
-			}
+			if (cfg.opt_force_icmp)
+				return send_icmp_other();
+			/* parse_options() rejects this earlier */
+			fprintf(stderr, "[send_icmp] Unsupported icmp type!\n");
+			return -1;
 	}
 }
 
-void send_icmp_echo(void)
+int send_icmp_echo(void)
 {
+	int rc;
 	char *packet, *data;
 	struct myicmphdr *icmp;
 
-	packet = malloc(ICMPHDR_SIZE + data_size);
+	packet = malloc(ICMPHDR_SIZE + cfg.data_size);
 	if (packet == NULL) {
 		perror("[send_icmp] malloc");
-		return;
+		return -1;
 	}
 
-	memset(packet, 0, ICMPHDR_SIZE + data_size);
+	memset(packet, 0, ICMPHDR_SIZE + cfg.data_size);
 
 	icmp = (struct myicmphdr*) packet;
 	data = packet + ICMPHDR_SIZE;
 
 	/* fill icmp hdr */
-	icmp->type = opt_icmptype;	/* echo replay or echo request */
-	icmp->code = opt_icmpcode;	/* should be indifferent */
+	icmp->type = cfg.opt_icmptype;	/* echo replay or echo request */
+	icmp->code = cfg.opt_icmpcode;	/* should be indifferent */
 	icmp->checksum = 0;
 	icmp->un.echo.id = getpid() & 0xffff;
 	icmp->un.echo.sequence = _icmp_seq;
 
 	/* data */
-	data_handler(data, data_size);
+	data_handler(data, cfg.data_size);
 
 	/* icmp checksum */
-	if (icmp_cksum == -1)
-		icmp->checksum = cksum((u_short*)packet, ICMPHDR_SIZE + data_size);
+	if (cfg.icmp_cksum == -1)
+		icmp->checksum = cksum((u_short*)packet, ICMPHDR_SIZE + cfg.data_size);
 	else
-		icmp->checksum = icmp_cksum;
+		icmp->checksum = cfg.icmp_cksum;
 
 	/* adds this pkt in delaytable */
-	if (opt_icmptype == ICMP_ECHO)
-		delaytable_add(_icmp_seq, 0, time(NULL), get_usec(), S_SENT);
+	if (cfg.opt_icmptype == ICMP_ECHO)
+		delaytable_add(_icmp_seq, 0, S_SENT);
 
 	/* send packet */
-	send_ip_handler(packet, ICMPHDR_SIZE + data_size);
+	rc = send_ip_handler(packet, ICMPHDR_SIZE + cfg.data_size);
 	free (packet);
 
 	_icmp_seq++;
+	return rc;
 }
 
-void send_icmp_timestamp(void)
+int send_icmp_timestamp(void)
 {
+	int rc;
 	char *packet;
 	struct myicmphdr *icmp;
 	struct icmp_tstamp_data *tstamp_data;
@@ -115,7 +127,7 @@ void send_icmp_timestamp(void)
 	packet = malloc(ICMPHDR_SIZE + sizeof(struct icmp_tstamp_data));
 	if (packet == NULL) {
 		perror("[send_icmp] malloc");
-		return;
+		return -1;
 	}
 
 	memset(packet, 0, ICMPHDR_SIZE + sizeof(struct icmp_tstamp_data));
@@ -124,7 +136,7 @@ void send_icmp_timestamp(void)
 	tstamp_data = (struct icmp_tstamp_data*) (packet + ICMPHDR_SIZE);
 
 	/* fill icmp hdr */
-	icmp->type = opt_icmptype;	/* echo replay or echo request */
+	icmp->type = cfg.opt_icmptype;	/* echo replay or echo request */
 	icmp->code = 0;
 	icmp->checksum = 0;
 	icmp->un.echo.id = getpid() & 0xffff;
@@ -133,32 +145,34 @@ void send_icmp_timestamp(void)
 	tstamp_data->recv = tstamp_data->tran = 0;
 
 	/* icmp checksum */
-	if (icmp_cksum == -1)
+	if (cfg.icmp_cksum == -1)
 		icmp->checksum = cksum((u_short*)packet, ICMPHDR_SIZE +
 				sizeof(struct icmp_tstamp_data));
 	else
-		icmp->checksum = icmp_cksum;
+		icmp->checksum = cfg.icmp_cksum;
 
 	/* adds this pkt in delaytable */
-	if (opt_icmptype == ICMP_TIMESTAMP)
-		delaytable_add(_icmp_seq, 0, time(NULL), get_usec(), S_SENT);
+	if (cfg.opt_icmptype == ICMP_TIMESTAMP)
+		delaytable_add(_icmp_seq, 0, S_SENT);
 
 	/* send packet */
-	send_ip_handler(packet, ICMPHDR_SIZE + sizeof(struct icmp_tstamp_data));
+	rc = send_ip_handler(packet, ICMPHDR_SIZE + sizeof(struct icmp_tstamp_data));
 	free (packet);
 
 	_icmp_seq++;
+	return rc;
 }
 
-void send_icmp_address(void)
+int send_icmp_address(void)
 {
+	int rc;
 	char *packet;
 	struct myicmphdr *icmp;
 
 	packet = malloc(ICMPHDR_SIZE + 4);
 	if (packet == NULL) {
 		perror("[send_icmp] malloc");
-		return;
+		return -1;
 	}
 
 	memset(packet, 0, ICMPHDR_SIZE + 4);
@@ -166,7 +180,7 @@ void send_icmp_address(void)
 	icmp = (struct myicmphdr*) packet;
 
 	/* fill icmp hdr */
-	icmp->type = opt_icmptype;	/* echo replay or echo request */
+	icmp->type = cfg.opt_icmptype;	/* echo replay or echo request */
 	icmp->code = 0;
 	icmp->checksum = 0;
 	icmp->un.echo.id = getpid() & 0xffff;
@@ -174,40 +188,44 @@ void send_icmp_address(void)
 	memset(packet+ICMPHDR_SIZE, 0, 4);
 
 	/* icmp checksum */
-	if (icmp_cksum == -1)
+	if (cfg.icmp_cksum == -1)
 		icmp->checksum = cksum((u_short*)packet, ICMPHDR_SIZE + 4);
 	else
-		icmp->checksum = icmp_cksum;
+		icmp->checksum = cfg.icmp_cksum;
 
 	/* adds this pkt in delaytable */
-	if (opt_icmptype == ICMP_TIMESTAMP)
-		delaytable_add(_icmp_seq, 0, time(NULL), get_usec(), S_SENT);
+	if (cfg.opt_icmptype == ICMP_TIMESTAMP)
+		delaytable_add(_icmp_seq, 0, S_SENT);
 
 	/* send packet */
-	send_ip_handler(packet, ICMPHDR_SIZE + 4);
+	rc = send_ip_handler(packet, ICMPHDR_SIZE + 4);
 	free (packet);
 
 	_icmp_seq++;
+	return rc;
 }
 
-void send_icmp_other(void)
+int send_icmp_other(void)
 {
+	int rc;
 	char *packet, *data, *ph_buf;
 	struct myicmphdr *icmp;
 	struct myiphdr icmp_ip;
 	struct myudphdr *icmp_udp;
 	int udp_data_len = 0;
 	struct pseudohdr *pseudoheader;
-	int left_space = IPHDR_SIZE + UDPHDR_SIZE + data_size;
+	int left_space = IPHDR_SIZE + UDPHDR_SIZE + cfg.data_size;
 
-	packet = malloc(ICMPHDR_SIZE + IPHDR_SIZE + UDPHDR_SIZE + data_size);
+	packet = malloc(ICMPHDR_SIZE + IPHDR_SIZE + UDPHDR_SIZE + cfg.data_size);
 	ph_buf = malloc(PSEUDOHDR_SIZE + UDPHDR_SIZE + udp_data_len);
 	if (packet == NULL || ph_buf == NULL) {
 		perror("[send_icmp] malloc");
-		return;
+		free(packet);
+		free(ph_buf);
+		return -1;
 	}
 
-	memset(packet, 0, ICMPHDR_SIZE + IPHDR_SIZE + UDPHDR_SIZE + data_size);
+	memset(packet, 0, ICMPHDR_SIZE + IPHDR_SIZE + UDPHDR_SIZE + cfg.data_size);
 	memset(ph_buf, 0, PSEUDOHDR_SIZE + UDPHDR_SIZE + udp_data_len);
 
 	icmp = (struct myicmphdr*) packet;
@@ -216,66 +234,67 @@ void send_icmp_other(void)
 	icmp_udp = (struct myudphdr *) (ph_buf + PSEUDOHDR_SIZE);
 
 	/* fill icmp hdr */
-	icmp->type = opt_icmptype;	/* ICMP_TIME_EXCEEDED */
-	icmp->code = opt_icmpcode;	/* should be 0 (TTL) or 1 (FRAGTIME) */
+	icmp->type = cfg.opt_icmptype;	/* ICMP_TIME_EXCEEDED */
+	icmp->code = cfg.opt_icmpcode;	/* should be 0 (TTL) or 1 (FRAGTIME) */
 	icmp->checksum = 0;
-	if (opt_icmptype == ICMP_REDIRECT)
-		memcpy(&icmp->un.gateway, &icmp_gw.sin_addr.s_addr, 4);
+	if (cfg.opt_icmptype == ICMP_REDIRECT)
+		memcpy(&icmp->un.gateway, &ctx.icmp_gw.sin_addr.s_addr, 4);
 	else
 		icmp->un.gateway = 0;	/* not used, MUST be 0 */
 
 	/* concerned packet headers */
 	/* IP header */
-	icmp_ip.version  = icmp_ip_version;		/* 4 */
-	icmp_ip.ihl      = icmp_ip_ihl;			/* IPHDR_SIZE >> 2 */
-	icmp_ip.tos      = icmp_ip_tos;			/* 0 */
-	icmp_ip.tot_len  = htons((icmp_ip_tot_len ? icmp_ip_tot_len : (icmp_ip_ihl<<2) + UDPHDR_SIZE + udp_data_len));
+	icmp_ip.version  = cfg.icmp_ip_version;		/* 4 */
+	icmp_ip.ihl      = cfg.icmp_ip_ihl;			/* IPHDR_SIZE >> 2 */
+	icmp_ip.tos      = cfg.icmp_ip_tos;			/* 0 */
+	icmp_ip.tot_len  = htons((cfg.icmp_ip_tot_len ? cfg.icmp_ip_tot_len : (cfg.icmp_ip_ihl<<2) + UDPHDR_SIZE + udp_data_len));
 	icmp_ip.id       = htons(getpid() & 0xffff);
 	icmp_ip.frag_off = 0;				/* 0 */
 	icmp_ip.ttl      = 64;				/* 64 */
-	icmp_ip.protocol = icmp_ip_protocol;		/* 6 (TCP) */
+	icmp_ip.protocol = cfg.icmp_ip_protocol;		/* 6 (TCP) */
 	icmp_ip.check	 = 0;
-	memcpy(&icmp_ip.saddr, &icmp_ip_src.sin_addr.s_addr, 4);
-	memcpy(&icmp_ip.daddr, &icmp_ip_dst.sin_addr.s_addr, 4);
+	memcpy(&icmp_ip.saddr, &ctx.icmp_ip_src.sin_addr.s_addr, 4);
+	memcpy(&icmp_ip.daddr, &ctx.icmp_ip_dst.sin_addr.s_addr, 4);
 	icmp_ip.check	 = cksum((__u16 *) &icmp_ip, IPHDR_SIZE);
 
 	/* UDP header */
-	memcpy(&pseudoheader->saddr, &icmp_ip_src.sin_addr.s_addr, 4);
-	memcpy(&pseudoheader->daddr, &icmp_ip_dst.sin_addr.s_addr, 4);
+	memcpy(&pseudoheader->saddr, &ctx.icmp_ip_src.sin_addr.s_addr, 4);
+	memcpy(&pseudoheader->daddr, &ctx.icmp_ip_dst.sin_addr.s_addr, 4);
 	pseudoheader->protocol = icmp_ip.protocol;
 	pseudoheader->lenght = icmp_ip.tot_len;
-	icmp_udp->uh_sport = htons(icmp_ip_srcport);
-	icmp_udp->uh_dport = htons(icmp_ip_dstport);
+	icmp_udp->uh_sport = htons(cfg.icmp_ip_srcport);
+	icmp_udp->uh_dport = htons(cfg.icmp_ip_dstport);
 	icmp_udp->uh_ulen  = htons(UDPHDR_SIZE + udp_data_len);
 	icmp_udp->uh_sum   = cksum((__u16 *) ph_buf, PSEUDOHDR_SIZE + UDPHDR_SIZE + udp_data_len);
 
-	/* filling icmp body with concerned packet header */
+	/* filling icmp body with concerned packet header.
+	 * left_space starts at IPHDR_SIZE + UDPHDR_SIZE + data_size, so
+	 * the quoted IP and UDP headers always fit: copy exactly the
+	 * source header sizes (never more than the source objects). */
 
 	/* fill IP */
-	if (left_space == 0) goto no_space_left;
-	memcpy(packet+ICMPHDR_SIZE, &icmp_ip, left_space);
+	memcpy(packet+ICMPHDR_SIZE, &icmp_ip, IPHDR_SIZE);
 	left_space -= IPHDR_SIZE;
 	data += IPHDR_SIZE;
-	if (left_space <= 0) goto no_space_left;
 
 	/* fill UDP */
-	memcpy(packet+ICMPHDR_SIZE+IPHDR_SIZE, icmp_udp, left_space);
+	memcpy(packet+ICMPHDR_SIZE+IPHDR_SIZE, icmp_udp, UDPHDR_SIZE);
 	left_space -= UDPHDR_SIZE;
 	data += UDPHDR_SIZE;
-	if (left_space <= 0) goto no_space_left;
 
 	/* fill DATA */
-	data_handler(data, left_space);
-no_space_left:
+	if (left_space > 0)
+		data_handler(data, left_space);
 
 	/* icmp checksum */
-	if (icmp_cksum == -1)
-		icmp->checksum = cksum((u_short*)packet, ICMPHDR_SIZE + IPHDR_SIZE + UDPHDR_SIZE + data_size);
+	if (cfg.icmp_cksum == -1)
+		icmp->checksum = cksum((u_short*)packet, ICMPHDR_SIZE + IPHDR_SIZE + UDPHDR_SIZE + cfg.data_size);
 	else
-		icmp->checksum = icmp_cksum;
+		icmp->checksum = cfg.icmp_cksum;
 
 	/* send packet */
-	send_ip_handler(packet, ICMPHDR_SIZE + IPHDR_SIZE + UDPHDR_SIZE + data_size);
+	rc = send_ip_handler(packet, ICMPHDR_SIZE + IPHDR_SIZE + UDPHDR_SIZE + cfg.data_size);
 	free (packet);
 	free (ph_buf);
+	return rc;
 }

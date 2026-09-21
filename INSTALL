@@ -1,62 +1,112 @@
-You can compile hping3 at least under:
+hping3 -- building, testing and installing
+==========================================
 
-Linux
-OpenBSD
-FreeBSD
-NetBSD
-Solaris
+Requirements
+------------
 
-But hping3 is beta, for now it was mostly tested only in Linux,
-this should change soon now that the first beta is out.
+  - a C compiler (GCC or Clang; C99 or later)
+  - GNU make (called "gmake" on the BSDs)
+  - libpcap with its headers (libpcap-dev / libpcap-devel)
+  - optional: Tcl 8.6 with its headers (tcl-dev / tcl-devel) for the
+    scripting mode. Without Tcl, hping3 builds as a command line tool only.
+  - root privileges are needed to *run* hping3 (raw sockets, packet
+    capture), never to build or test it.
 
-Note that starting from hping3 libpcap should be used
-with all the kind of systems, including Linux.
+Supported/tested platforms
+--------------------------
 
-Linux
------
+  Linux (x86_64, glibc) is the platform the build and the test-suite are
+  verified on. The BSD/Solaris/macOS code paths are still present but were
+  not built as part of the current work; treat them as "compiles maybe,
+  untested" until they are added to the CI matrix.
 
-please, follows this steps:
+Quick start
+-----------
 
-$ ./configure (first try ./configure --help)
-$ vi Makefile (optional)
-$ make
-$ su
-# make install
+  $ ./configure            # or: ./configure --no-tcl / --with-tcl
+  $ make
+  $ make check             # offline test-suite, no root, no traffic
+  $ sudo make install
 
-FreeBSD, OpenBSD, NetBSD
-------------------------
+configure options and variables
+-------------------------------
 
-You will need the libpcap and the gmake utility installed on your system. 
+  --prefix=DIR      installation prefix           (default /usr/local)
+  --sbindir=DIR     where hping3 goes             (default PREFIX/sbin)
+  --mandir=DIR      manual pages                  (default PREFIX/share/man)
+  --datadir=DIR     Tcl example scripts           (default PREFIX/share)
+  --no-tcl          build without Tcl scripting
+  --with-tcl        require Tcl: configure fails if it is not usable
+                    (the default, without either option, is to use Tcl
+                    when a working installation is found)
 
-$ ./configure
-$ gmake
-$ su (or calife)
-# gmake install
+  Environment: CC CPPFLAGS CFLAGS LDFLAGS LDLIBS AR RANLIB PKG_CONFIG
+               TCLSH TCL_CONFIG (path to tclConfig.sh)
+               HPING_OSTYPE (override "uname -s" for cross builds)
 
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-NOTE: You should take care about your net/bpf.h file installing on
-      BSD systems (specially with OpenBSD). If your original bpf.h was
-      overwritten with the libpcap one probably hping will not work
-      with over some interface.
+  Tcl is looked for, in this order, through TCL_CONFIG, TCLSH,
+  pkg-config (tcl, tcl9.0, tcl8.6, tcl8.5), the usual tclConfig.sh
+  locations and finally a tclsh in PATH. A found Tcl is only used if a
+  test program builds and links against it. Tcl 8.6 is the version the
+  test-suite runs with; Tcl 9 detection exists but is not verified yet.
 
-      For example if you use the libpcap bpf.h on OpenBSD hping will
-      not work over PPP interfaces.
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  libpcap is located through pkg-config or pcap-config, falling back to
+  plain -lpcap. configure exits with status 1 if pcap.h/libpcap, the
+  compiler, or an explicitly required Tcl are missing; the failing test
+  program output is left in .configure-tmp/t.log.
 
-Solaris
--------
+  Byte order is taken from the compiler's __BYTE_ORDER__ macro, so
+  cross-compiling works with any GCC/Clang; only compilers without that
+  macro fall back to running the byteorder.c probe.
 
-$ export CC="gcc"
-$ ./configure
-$ gmake
-$ su
-# gmake install
+make targets
+------------
 
-ALL
----
+  make                 build ./hping3
+  make check           build and run the test-suite (tests/)
+  make WERROR=1        treat compiler warnings as errors (CI does this)
+  make SANITIZE=1 ...  build with ASan/UBSan; combine with check, e.g.
+                       make clean && make check SANITIZE=1
+  make install         install into DESTDIR/prefix (see below)
+  make uninstall       remove what install created
+  make libars.a        the ARS packet library as a static archive
+  make clean / distclean
 
-To setuid hping3 is like to open the port to script kiddies
-for now. Don't do it in any real multiuser and otherwise
-security-sensitive system.
+Installation layout and staging
+-------------------------------
 
-antirez
+  make install DESTDIR=/tmp/stage   # nothing is written outside DESTDIR
+
+  sbindir/hping3            the binary (mode 755)
+  sbindir/hping, hping2     relative symlinks to hping3 (ln -sf: repeated
+                            installs just replace them)
+  mandir/man8/hping3.8      manual page
+  datadir/hping3/lib/*.htcl Tcl example scripts (only with Tcl support)
+
+  Paths containing spaces are supported (they are quoted in the recipes).
+  Nothing is made setuid: run hping3 as root or with the needed
+  capabilities. See the README about the risks of setuid installations.
+
+Test-suite
+----------
+
+  "make check" builds tests/test_core, tests/test_waitpacket,
+  tests/test_scan, tests/test_loop, tests/test_parse and (with Tcl)
+  tests/test_script, runs them, then runs tests/cli.sh (--help/--version/
+  option validation against ./hping3), tests/install.sh (staged install
+  into a temporary directory) and tests/libars.sh (a program linked
+  against libars.a alone). All of it runs as an ordinary user without
+  opening a socket: packets are crafted in memory or read from pcap
+  savefiles written by the tests themselves, and the event loop is driven
+  by a fake clock.
+
+  The historical scripts in lib/regtest send real packets and are not
+  part of "make check".
+
+Historical notes
+----------------
+
+  Earlier versions required copying a BSD net/bpf.h on some systems; the
+  header is now only included where it exists (configure checks for it).
+  The "make install" of previous versions wrote absolute symlinks into
+  /usr/sbin; that is what DESTDIR/prefix replace.

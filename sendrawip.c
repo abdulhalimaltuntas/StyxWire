@@ -11,17 +11,19 @@
 #include "hping2.h"
 #include "globals.h"
 
-void send_rawip(void)
+int send_rawip(void)
 {
+	int rc;
 	char *packet;
 
-	packet = malloc(data_size);
+	packet = malloc(cfg.data_size);
 	if (packet == NULL) {
 		perror("[send_rawip] malloc()");
-		return;
+		return -1;
 	}
-	memset(packet, 0, data_size);
-	data_handler(packet, data_size);
-	send_ip_handler(packet, data_size);
+	memset(packet, 0, cfg.data_size);
+	data_handler(packet, cfg.data_size);
+	rc = send_ip_handler(packet, cfg.data_size);
 	free(packet);
+	return rc;
 }

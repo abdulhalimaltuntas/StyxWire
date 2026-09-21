@@ -1,4 +1,97 @@
 CHANGES LOG
 $Id: CHANGES,v 1.2 2004/03/29 23:12:04 antirez Exp $
 
+------ phase 2: architecture and run time lifecycle (2026-09) -------
+
+See docs/ASAMA2-RAPORU.md and docs/KARAR-KAYITLARI.md. In short:
+
+  - State split into struct hping_config (cfg), struct hping_context
+    (ctx) and struct hping_stats (stats), with init functions (globals.c).
+  - One monotonic clock for RTT, intervals and deadlines (clock.c); the
+    wall clock only for the ICMP timestamp option; clock and random
+    sources are replaceable (tests).
+  - Lifecycle init/run/stop/destroy and a poll(2) event loop
+    (lifecycle.c): packets are no longer sent from a SIGALRM handler,
+    SIGINT/SIGTERM/SIGTSTP handlers only set a flag and wake the loop
+    through a pipe; the capture handle runs in immediate, non-blocking
+    mode.
+  - No exit() below the command line entry points: parse_options()
+    returns OK/DONE/ERROR, the send path returns status codes,
+    hping_run() returns the exit status.
+  - Statistics: 64 bit counters, duplicate and unmatched replies counted
+    separately, packet loss = (sent - unique replies) * 100 / sent (like
+    ping; 2 of 3 answered is now 33%, was 34%), "transmitted" spelling.
+  - --scan runs in the single event loop (no fork, no SysV shared
+    memory, which also leaked a segment per scan); port 65535 is scanned.
+  - --apd-send is executed after parsing, unsupported ICMP types and bad
+    --rand-dest templates are rejected before any socket is opened,
+    usage errors go to stderr.
+  - Behaviour changes worth knowing: -i 0 now sends as fast as possible
+    (it used to stop after the first packet), --flood -c N sends exactly
+    N packets, --count is satisfied by unique replies only.
+  - Tests: tests/test_loop.c (fake clock, scripted replies, real signal
+    wake up, savefile I/O), tests/test_parse.c, scan state machine tests,
+    standalone libars.a link check; 723 checks in total.
+
+------ phase 1: reliable build and critical fixes (2026-09) -------
+
+See docs/ASAMA1-RAPORU.md for the full report. In short:
+
+Build
+  - configure rewritten: --prefix/--sbindir/--mandir/--datadir, --no-tcl
+    is honoured before Tcl detection, --with-tcl makes a missing Tcl
+    fatal, CC/CPPFLAGS/CFLAGS/LDFLAGS/LDLIBS/AR/RANLIB are honoured,
+    libpcap and Tcl are found through pkg-config/tclConfig.sh and
+    verified with a test program, failures exit with status 1.
+  - Makefile: DESTDIR/prefix installation with relative symlinks,
+    make check (offline test-suite), make WERROR=1, make SANITIZE=1.
+  - net/bpf.h is only included where it exists (Linux builds again),
+    delaytable is no longer defined in a header (GCC >= 10 -fno-common),
+    strlcpy.c is skipped when the C library provides strlcpy.
+  - byteorder.h prefers the compiler's __BYTE_ORDER__ (cross builds).
+
+Memory safety / parsers (all covered by tests in tests/)
+  - pcap_recv() copies at most the buffer size (frames larger than the
+    buffer were written past it).
+  - scan.c: ICMP header copy size, IHL/length sanity checks, port range
+    bounds, "1-" syntax error, URG flag letter.
+  - waitpacket.c: quoted headers in ICMP errors are checked before being
+    copied, TCP option parsing terminates on zero-length options and
+    respects the captured length, HCMP length check had its sign
+    reversed, IHL < 5 is rejected.
+  - display_ipopt(): option parsing is bounded by the header length.
+  - send.c --rand-dest: octet buffers were one byte too small; octets
+    are validated (0-255 or x).
+  - memstr(): needle length no longer stored in a char; bounds fixed.
+  - sendicmp.c: quoted IP/UDP headers copied with their real size.
+  - ARS: split.c reads headers through aligned copies and checks the
+    available size before every field access (truncated TCP/UDP headers,
+    tot_len < IHL, IHL < 5, zero-length options, options without length
+    byte); rapd.c never reads past the layer (option data, SACK blocks,
+    unknown options); ars_cksum()/ars_multi_cksum() no longer read one
+    byte past odd-sized buffers; ars_udptcp_cksum() with no IP layer
+    no longer reads p_layer[-1]; the TCP option padding lost the
+    realloc()ed pointer (use after free).
+  - APD: hex data validation really rejects non-hex digits, tcp.ts has a
+    working setter (val/ecr), tcp.timestamp and tcp.echoreq are accepted
+    as aliases so that rapd output parses again, ip.sec tcc lands in the
+    right field, tcp.wscale shift is no longer byte-swapped, rapd prints
+    the IP checksum in host order like the other checksums.
+  - Tcl: 'hping recv' with several packets described each packet from a
+    wrong offset (and could overflow the buffer); read errors/end of
+    savefile are reported instead of looping; 'hping event ifname {}'
+    removes the file handler; Tcl_GetIntFromObj() errors are propagated;
+    'hping recvraw' returns byte arrays and 'hping sendraw' accepts
+    them; Tcl_Size compatibility typedef, no deprecated panic().
+  - hex.c: the digit table was signed, invalid digits were accepted.
+  - globals.h: ip_optlen declared with its real type (unsigned int).
+
+Command line
+  - --faster no longer also enables --tr-keep-ttl (missing break).
+  - numeric option values are validated (whole argument consumed, range
+    of the protocol field); bad values are rejected with a message and
+    exit status 1 instead of being silently truncated.
+  - help text and man page: --fast is -i u100000, --faster is -i u1,
+    the default window is 512.
+
 30Mar2004 - First public release of hping3

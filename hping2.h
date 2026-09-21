@@ -64,8 +64,9 @@
 /* requests status table stuffs */
 /* Warning, TABLESIZE 0 == floating point exception */
 #define TABLESIZE	400
-#define S_SENT		0
-#define S_RECV		1
+#define S_SENT		0	/* probe sent, not answered yet */
+#define S_RECV		1	/* probe already answered: a duplicate */
+#define S_UNKNOWN	-1	/* no probe in the delay table (rtt.c) */
 
 /* usefull defines */
 #ifndef TRUE
@@ -100,12 +101,6 @@
 #ifndef IP_MAX_SIZE
 #define IP_MAX_SIZE	65535
 #endif 
-
-/* absolute offsets */
-#define ABS_OFFSETIP	linkhdr_size
-#define ABS_OFFSETTCP	( linkhdr_size + IPHDR_SIZE )
-#define ABS_OFFSETICMP	( linkhdr_size + IPHDR_SIZE )
-#define ABS_OFFSETUDP	( linkhdr_size + IPHDR_SIZE )
 
 /* defaults and misc */
 #define DEFAULT_SENDINGWAIT 1	/* wait 1 sec. between sending each packets */
@@ -352,16 +347,28 @@ struct pseudohdr
 struct delaytable_element {
 	int seq;
 	int src;
-	time_t sec;
-	time_t usec;
+	long long sent_us;	/* monotonic clock, see clock.c */
 	int status;
 };
 
-volatile struct delaytable_element delaytable[TABLESIZE];
+/* time and randomness sources, replaceable for tests (clock.c) */
+struct hping_clock {
+	long long (*monotonic_us)(void *arg);
+	long long (*wall_us)(void *arg);
+	void *arg;
+};
+struct hping_random {
+	unsigned int (*u32)(void *arg);
+	void *arg;
+};
+
 
 /* protos */
 void	nop(void);				/* nop */
-int	parse_options(int, char**);		/* option parser */
+int	parse_options(int, char**);		/* option parser, see parseoptions.c */
+#define HPING_PARSE_OK		0
+#define HPING_PARSE_DONE	1	/* help/version printed: exit 0 */
+#define HPING_PARSE_ERROR	-1	/* diagnostic printed: exit 1 */
 int	get_if_name(void);			/* get interface (see source) */
 int	get_output_if(struct sockaddr_in *dest, struct sockaddr_in *ifip);
 int	dltype_to_lhs(int dltype);
@@ -370,36 +377,56 @@ int	open_sockpacket(void);			/* open SOCK_PACKET socket */
 int	open_sockpacket_ifindex(int ifindex);
 int	close_sockpacket(int);			/* close SOCK_PACKET socket */
 int	open_sockraw(void);			/* open raw socket */
-void	send_packet (int signal_id);
-void	send_rawip (void);
-void	send_tcp(void);
-void	send_udp(void);
-void	send_icmp(void);
-void	send_hcmp(__u8 type, __u32 arg);	/* send hcmp packets */
-void	send_ip (char*, char*, char*, unsigned int, int, unsigned short,
-		 char*, char);
-void	send_ip_handler(char *packet, unsigned int size); /* fragmentation
+int	send_packet(void);			/* one probe; -1 on send error */
+int	parse_rand_dest(const char *template, unsigned char ra[4]);
+int	send_rawip (void);
+int	send_tcp(void);
+int	send_udp(void);
+int	send_icmp(void);
+int	icmp_type_supported(int type);
+int	send_hcmp(__u8 type, __u32 arg);	/* send hcmp packets */
+int	send_ip (char*, char*, char*, unsigned int, int, unsigned short,
+		 char*, unsigned int);
+int	send_ip_handler(char *packet, unsigned int size); /* fragmentation
                                                              handler */
 void	wait_packet(void);			/* handle incoming packets */
-void	print_statistics(int);
 void	show_usage(void);
 void	show_version(void);
 int	resolve_addr(struct sockaddr * addr, char *hostname); /* resolver */
-void	resolve(struct sockaddr*, char*);	/* resolver, exit on err. */
+
+/* lifecycle (lifecycle.c) */
+int	hping_init(void);			/* resolve, open sockets, signals */
+int	hping_run(void);			/* the event loop; returns the exit status */
+void	hping_stop(int reason);			/* ask the loop to end (HPING_STOP_*) */
+void	hping_destroy(void);			/* release everything hping_init() took */
+int	hping_stop_requested(void);		/* non zero once a stop was asked */
+int	hping_signals_install(void);		/* flag-only handlers + wake up pipe */
+void	hping_signals_restore(void);
+struct hping_io_ops;
+void	hping_io_pcap(struct hping_io_ops *io);	/* the default ctx.io */
+long long hping_send_interval_us(void);		/* from -i/--fast/--faster */
+int	listen_run(void);			/* --listen main loop (listen.c) */
+int	scan_run(void);				/* --scan (scan.c) */
+int	hping_ars_send(const char *apd);	/* --apd-send: 0 sent, -1 error */
 void	log_icmp_unreach(char*, unsigned short);/* ICMP unreachable logger */
 void	log_icmp_timeexc(char*, unsigned short);/* ICMP time exceeded logger */
-time_t	get_usec(void);				/* return current usec */
-time_t	milliseconds(void);			/* ms from UT midnight */
-long long mstime(void);                         /* ms from 1 Jan 1970 */
+long long hping_monotonic_us(void);		/* elapsed time base (clock.c) */
+long long hping_wall_us(void);			/* calendar time, reporting only */
+unsigned int hping_rand(void);			/* random source (clock.c) */
+void	hping_clock_set(long long (*monotonic_us)(void*),
+			long long (*wall_us)(void*), void *arg);
+void	hping_random_set(unsigned int (*u32)(void*), void *arg);
+time_t	milliseconds(void);			/* wall ms from UT midnight (ICMP ts) */
+long long mstime(void);				/* monotonic ms (elapsed time) */
 #define get_midnight_ut_ms milliseconds		/* backward compatibilty */
 __u16	cksum(__u16 *buf, int nwords);		/* compute 16bit checksum */
-void	inc_destparm(int sid);			/* inc dst port or ttl */
+void	inc_destparm(void);			/* inc dst port or ttl (ctrl+z) */
 char	*get_hostname(char*);			/* get host from addr */
 void	datafiller(char *p, int size);		/* fill data from file */
-void	data_handler(char *data, int data_size);/* handle data filling */
+void	data_handler(char *data, int size);	/* handle data filling */
 void	socket_broadcast(int sd);		/* set SO_BROADCAST option */
 void	socket_iphdrincl(int sd);		/* set SO_IPHDRINCL option */
-void	listenmain(void);			/* main for listen mode */
+
 char	*memstr(char *haystack, char *needle, int size); /* memstr */
 void	tos_help(void);				/* show the TOS help */
 int	rtt(int *seqp, int recvport, float *ms_delay);	/* compute round trip time */
@@ -417,18 +444,13 @@ unsigned char ip_opt_build(char *ip_opt);		/* build ip options */
 void	display_ipopt(char* buf);		/* display ip options */
 void	icmp_help(void);			/* show the ICMP help */
 void	route_help(void);			/* show the route help */
-void	(*Signal(int signo, void (*func)(int)))(int);
-void	delaytable_add(int seq, int src, time_t sec, time_t usec, int status);
+void	delaytable_add(int seq, int src, int status); /* timestamps now */
 int	read_packet(void *packet, int size);
-void	scanmain(void);
 void	hping_script(int argc, char **argv);
 u_int32_t hp_rand(void);
 #if !defined(__FreeBSD__) && !defined(__OpenBSD__) && !defined(__NetBSD__) && \
     !defined(__bsdi__) && !defined(__APPLE__)
 size_t strlcpy(char *dst, const char *src, size_t siz);
 #endif
-
-/* ARS glue */
-void hping_ars_send(char *s);
 
 #endif /* _HPING2_H */

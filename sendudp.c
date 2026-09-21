@@ -23,18 +23,19 @@
 
 /* void hexdumper(unsigned char *packet, int size); */
 
-void send_udp(void)
+int send_udp(void)
 {
+	int rc;
 	int			packet_size;
 	char			*packet, *data;
 	struct myudphdr		*udp;
 	struct pseudohdr *pseudoheader;
 
-	packet_size = UDPHDR_SIZE + data_size;
+	packet_size = UDPHDR_SIZE + cfg.data_size;
 	packet = malloc(PSEUDOHDR_SIZE + packet_size);
 	if (packet == NULL) {
 		perror("[send_udphdr] malloc()");
-		return;
+		return -1;
 	}
 	pseudoheader = (struct pseudohdr*) packet;
 	udp =  (struct myudphdr*) (packet+PSEUDOHDR_SIZE);
@@ -43,18 +44,18 @@ void send_udp(void)
 	memset(packet, 0, PSEUDOHDR_SIZE+packet_size);
 
 	/* udp pseudo header */
-	memcpy(&pseudoheader->saddr, &local.sin_addr.s_addr, 4);
-	memcpy(&pseudoheader->daddr, &remote.sin_addr.s_addr, 4);
+	memcpy(&pseudoheader->saddr, &ctx.local.sin_addr.s_addr, 4);
+	memcpy(&pseudoheader->daddr, &ctx.remote.sin_addr.s_addr, 4);
 	pseudoheader->protocol		= 17; /* udp */
 	pseudoheader->lenght		= htons(packet_size);
 
 	/* udp header */
-	udp->uh_dport	= htons(dst_port);
-	udp->uh_sport	= htons(src_port);
+	udp->uh_dport	= htons(cfg.dst_port);
+	udp->uh_sport	= htons(ctx.src_port);
 	udp->uh_ulen	= htons(packet_size);
 
 	/* data */
-	data_handler(data, data_size);
+	data_handler(data, cfg.data_size);
 
 	/* compute checksum */
 #ifdef STUPID_SOLARIS_CHECKSUM_BUG
@@ -65,17 +66,18 @@ void send_udp(void)
 #endif
 
 	/* adds this pkt in delaytable */
-	delaytable_add(sequence, src_port, time(NULL), get_usec(), S_SENT);
+	delaytable_add(ctx.sequence, ctx.src_port, S_SENT);
 
 	/* send packet */
-	send_ip_handler(packet+PSEUDOHDR_SIZE, packet_size);
+	rc = send_ip_handler(packet+PSEUDOHDR_SIZE, packet_size);
 	free(packet);
 
-	sequence++;	/* next sequence number */
+	ctx.sequence++;	/* next sequence number */
 
-	if (!opt_keepstill)
-		src_port = (sequence + initsport) % 65536;
+	if (!cfg.opt_keepstill)
+		ctx.src_port = (ctx.sequence + cfg.initsport) % 65536;
 
-	if (opt_force_incdport)
-		dst_port++;
+	if (cfg.opt_force_incdport)
+		cfg.dst_port++;
+	return rc;
 }

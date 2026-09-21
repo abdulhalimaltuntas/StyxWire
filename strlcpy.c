@@ -40,8 +40,11 @@
 
 /* $Id: strlcpy.c,v 1.1.1.1 2003/08/31 17:23:55 antirez Exp $ */
 
-/* This function comes from BSD */
-#if !defined(__FreeBSD__) && !defined(__OpenBSD__) && !defined(__NetBSD__) && \
+/* This function comes from BSD. It is only compiled when the C library
+ * lacks strlcpy() (configure defines HAVE_STRLCPY otherwise; glibc has it
+ * since 2.38). */
+#if !defined(HAVE_STRLCPY) && \
+    !defined(__FreeBSD__) && !defined(__OpenBSD__) && !defined(__NetBSD__) && \
     !defined(__bsdi__) && !defined(__APPLE__)
 #include <sys/types.h>
 #include <string.h>
@@ -51,10 +54,7 @@
  * will be copied.  Always NUL terminates (unless siz == 0).
  * Returns strlen(src); if retval >= siz, truncation occurred.
  */
-size_t strlcpy(dst, src, siz)
-        char *dst;
-        const char *src;
-        size_t siz;
+size_t strlcpy(char *dst, const char *src, size_t siz)
 {
         register char *d = dst;
         register const char *s = src;
@@ -79,4 +79,6 @@ size_t strlcpy(dst, src, siz)
         return(s - src - 1);    /* count does not include NUL */
 }
 
+#else
+typedef int hping_strlcpy_not_needed; /* keep the translation unit non-empty */
 #endif /* ! __*BSD__ */

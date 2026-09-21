@@ -18,19 +18,22 @@
 #include "hping2.h"
 #include "globals.h"
 
-void inc_destparm(int sid)
+/* ctrl+z binding (--bind/--unbind): increment the destination port or
+ * the TTL, decrement on a double press. Called by the event loop when
+ * SIGTSTP was received, never from the handler itself. */
+void inc_destparm(void)
 {
-	static long sec = 0;
-	static long usec = 0;
+	static long long last_us = 0;
+	long long now_us;
 	int *p;
 	int errno_save = errno;
 
-	switch (ctrlzbind) {
+	switch (cfg.ctrlzbind) {
 	case BIND_DPORT:
-		p = &dst_port;
+		p = &cfg.dst_port;
 		break;
 	case BIND_TTL:
-		p = &src_ttl;
+		p = &cfg.src_ttl;
 		break;
 	default:
 		printf("error binding ctrl+z\n");
@@ -38,7 +41,9 @@ void inc_destparm(int sid)
 		return;
 	}
 
-	if ( (time(NULL) == sec) && ((get_usec() - usec) < 200000) ) {
+	now_us = hping_monotonic_us();
+	/* two presses within 200 ms decrement instead of increment */
+	if (last_us != 0 && (now_us - last_us) < 200000) {
 		if (*p > 0)
 			(*p)-=2;
 		if (*p < 0)
@@ -50,8 +55,6 @@ void inc_destparm(int sid)
 	printf("%d: ", *p);
 	fflush(stdout);
 
-	sec = time(NULL);
-	usec = get_usec();
-	signal(SIGTSTP, inc_destparm);
+	last_us = now_us;
 	errno = errno_save;
 }

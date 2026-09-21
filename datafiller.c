@@ -27,7 +27,7 @@ void datafiller(char *p, int size)
 	int readed, diff;
 
 	if (!fd) {
-		fd = open(datafilename, O_RDONLY);
+		fd = open(cfg.datafilename, O_RDONLY);
 		if (fd == -1) {
 			perror("[datafiller] open()");
 			fd = 0; /* will retry to open the file for
@@ -39,7 +39,7 @@ void datafiller(char *p, int size)
 
 	if (p == NULL && fd != -1) { /* seek operation */
 		/* size-1 because packet with id 1 start from 0 */
-		lseek(fd, (data_size-signlen)*(size-1), SEEK_SET);
+		lseek(fd, (cfg.data_size-cfg.signlen)*(size-1), SEEK_SET);
 		return;
 	}
 
@@ -55,19 +55,20 @@ restart: /* if EOF occurs, after rewind, restart */
 		memset(p, 'X', size);
 		return;
 	}
-	else if (readed < size && opt_end == FALSE) {
+	else if (readed < size && cfg.opt_end == FALSE) {
 		lseek(fd, 0, SEEK_SET);
 		if (readed == 0)
 			goto restart;
 	}
-	else if (readed < size && opt_end == TRUE) {
+	else if (readed < size && cfg.opt_end == TRUE) {
 		fprintf(stderr, "EOF reached, wait some second than press "
 				"ctrl+c\n");
-		eof_reached = TRUE;
+		ctx.eof_reached = TRUE;
 	} else {
-		printf("[datafiller.c INTERNAL ERROR] readed = %d - "
-			"opt_end == %d\n", readed, opt_end);
-		exit(1);
+		/* readed > size cannot happen; keep the packet well formed */
+		fprintf(stderr, "[datafiller.c INTERNAL ERROR] readed = %d - "
+			"opt_end == %d\n", readed, cfg.opt_end);
+		readed = size;
 	}
 	diff = size - readed;
 	memset(p+readed, '\0', diff); /* padding */

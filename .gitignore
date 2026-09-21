@@ -6,3 +6,12 @@ Makefile
 byteorder
 byteorder.h
 systype.h
+.configure-tmp
+tests/*.o
+tests/test_core
+tests/test_waitpacket
+tests/test_scan
+tests/test_script
+hping3-static
+libars.a
+tests/libars_link

@@ -84,13 +84,13 @@ int dltype_to_lhs(int dltype)
 	return lhs;
 }
 
-int get_linkhdr_size(char *ifname)
+int get_linkhdr_size(char *ifname_unused)
 {
-	int dltype = pcap_datalink(pcapfp);
+	int dltype = pcap_datalink(ctx.pcapfp);
 
-	if (opt_debug)
+	if (cfg.opt_debug)
 		printf("DEBUG: dltype is %d\n", dltype);
 
-	linkhdr_size = dltype_to_lhs(dltype);
-	return linkhdr_size;
+	ctx.linkhdr_size = dltype_to_lhs(dltype);
+	return ctx.linkhdr_size;
 }

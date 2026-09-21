@@ -13,19 +13,18 @@
 #include <string.h>
 #include <assert.h>
 #include <unistd.h>
-#include <signal.h> /* SIGALARM macro */
 
 #include "hping2.h"
 #include "globals.h"
 
 #define MUST_BE_UNREACHED 0
 
-void    send_hcmp(__u8 type, __u32 arg)
+int    send_hcmp(__u8 type, __u32 arg)
 {
 	static struct hcmphdr hcmph; /* static because we export this */
 				     /* to data_handler() */
 
-	data_size = signlen + sizeof(struct hcmphdr);
+	cfg.data_size = cfg.signlen + sizeof(struct hcmphdr);
 
 	/* build hcmp header */
 	memset(&hcmph, 0, sizeof(hcmph));
@@ -44,8 +43,6 @@ void    send_hcmp(__u8 type, __u32 arg)
 	}
 
 	/* use hcmphdr_p to transmit hcmph to data_handler() */
-	hcmphdr_p = &hcmph;
-	kill(getpid(), SIGALRM); /* send hcmp */
-
-	return;
+	ctx.hcmphdr_p = &hcmph;
+	return send_packet(); /* send hcmp */
 }

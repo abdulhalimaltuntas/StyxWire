@@ -15,7 +15,6 @@
 #include <stdlib.h>
 #include <sys/time.h>
 #include <unistd.h>
-#include <signal.h>
 #include <errno.h>
 
 #include "hping2.h"
@@ -29,66 +28,92 @@ static void select_next_random_source(void)
 	ra[1] = hp_rand() & 0xFF;
 	ra[2] = hp_rand() & 0xFF;
 	ra[3] = hp_rand() & 0xFF;
-	memcpy(&local.sin_addr.s_addr, ra, 4);
+	memcpy(&ctx.local.sin_addr.s_addr, ra, 4);
 
-	if (opt_debug)
+	if (cfg.opt_debug)
 		printf("DEBUG: the source address is %u.%u.%u.%u\n",
 		    ra[0], ra[1], ra[2], ra[3]);
 }
 
-static void select_next_random_dest(void)
+/* Convert one --rand-dest octet: "x" means random, otherwise a number
+ * in the range 0-255. Returns -1 on a bad octet. */
+static int rand_dest_octet(const char *s)
+{
+	char *end;
+	unsigned long v;
+
+	if (s[0] == 'x' && s[1] == '\0')
+		return hp_rand() & 0xFF;
+	if (s[0] == '\0')
+		return -1;
+	v = strtoul(s, &end, 10);
+	if (*end != '\0' || v > 255)
+		return -1;
+	return (int) v;
+}
+
+/* Parse a --rand-dest template like "192.168.x.x" into 'ra'.
+ * Returns 0 on success, -1 on error. Exported for the test-suite. */
+int parse_rand_dest(const char *template, unsigned char ra[4])
+{
+	/* four octets of up to 4 chars each (sscanf adds the nul term) */
+	char a[5], b[5], c[5], d[5];
+	int v[4], i;
+	const char *oct[4];
+
+	if (sscanf(template, "%4[^.].%4[^.].%4[^.].%4[^.]", a, b, c, d) != 4)
+		return -1;
+	oct[0] = a; oct[1] = b; oct[2] = c; oct[3] = d;
+	for (i = 0; i < 4; i++) {
+		v[i] = rand_dest_octet(oct[i]);
+		if (v[i] < 0)
+			return -1;
+	}
+	for (i = 0; i < 4; i++)
+		ra[i] = (unsigned char) v[i];
+	return 0;
+}
+
+static int select_next_random_dest(void)
 {
 	unsigned char ra[4];
-	char a[4], b[4], c[4], d[4];
 
-	if (sscanf(targetname, "%4[^.].%4[^.].%4[^.].%4[^.]", a, b, c, d) != 4)
+	if (parse_rand_dest(cfg.targetname, ra) == -1)
 	{
+		/* parse_options() validates the template, this is a guard */
 		fprintf(stderr,
 			"wrong --rand-dest target host, correct examples:\n"
-			"  x.x.x.x, 192,168.x.x, 128.x.x.255\n"
-			"you typed: %s\n", targetname);
-		exit(1);
+			"  x.x.x.x, 192.168.x.x, 128.x.x.255\n"
+			"you typed: %s\n", cfg.targetname);
+		return -1;
 	}
-	a[3] = b[3] = c[3] = d[3] = '\0';
+	memcpy(&ctx.remote.sin_addr.s_addr, ra, 4);
 
-	ra[0] = a[0] == 'x' ? (hp_rand() & 0xFF) : strtoul(a, NULL, 0);
-	ra[1] = b[0] == 'x' ? (hp_rand() & 0xFF) : strtoul(b, NULL, 0);
-	ra[2] = c[0] == 'x' ? (hp_rand() & 0xFF) : strtoul(c, NULL, 0);
-	ra[3] = d[0] == 'x' ? (hp_rand() & 0xFF) : strtoul(d, NULL, 0);
-	memcpy(&remote.sin_addr.s_addr, ra, 4);
-
-	if (opt_debug) {
+	if (cfg.opt_debug) {
 		printf("DEBUG: the dest address is %u.%u.%u.%u\n",
 				ra[0], ra[1], ra[2], ra[3]);
 	}
+	return 0;
 }
 
-/* The signal handler for SIGALRM will send the packets */
-void send_packet (int signal_id)
+/* Send one probe of the selected mode. Called from the event loop
+ * (lifecycle.c) when the sending deadline is due, never from a signal
+ * handler. Returns 0, or -1 when the packet could not be sent. */
+int send_packet(void)
 {
-	int errno_save = errno;
+	int rc;
 
-	if (opt_rand_dest)
-		select_next_random_dest();
-	if (opt_rand_source)
+	if (cfg.opt_rand_dest && select_next_random_dest() == -1)
+		return -1;
+	if (cfg.opt_rand_source)
 		select_next_random_source();
 
-	if (opt_rawipmode)	send_rawip();
-	else if (opt_icmpmode)	send_icmp();
-	else if (opt_udpmode)	send_udp();
-	else			send_tcp();
+	if (cfg.opt_rawipmode)		rc = send_rawip();
+	else if (cfg.opt_icmpmode)	rc = send_icmp();
+	else if (cfg.opt_udpmode)	rc = send_udp();
+	else				rc = send_tcp();
 
-	sent_pkt++;
-	Signal(SIGALRM, send_packet);
-
-	if (count != -1 && count == sent_pkt) { /* count reached? */
-		Signal(SIGALRM, print_statistics);
-		alarm(COUNTREACHED_TIMEOUT);
-	} else if (!opt_listenmode) {
-		if (opt_waitinusec == FALSE)
-			alarm(sending_wait);
-		else
-			setitimer(ITIMER_REAL, &usec_delay, NULL);
-	}
-	errno = errno_save;
+	if (rc == 0)
+		hping_stats_on_sent();
+	return rc;
 }

@@ -23,7 +23,9 @@
 #include <sched.h>
 
 #include <sys/ioctl.h>
-#include <net/bpf.h>
+#ifdef HAVE_NET_BPF_H
+#include <net/bpf.h>	/* BIOCIMMEDIATE on BSD systems */
+#endif
 #include <pcap.h>
 
 #include "release.h"
@@ -32,6 +34,12 @@
 #include "interface.h"
 #include "apdutils.h"
 #include "sbignum.h"
+
+/* Tcl 9 changed every length/index argument to Tcl_Size; Tcl 8.6 uses int.
+ * Provide the type for 8.x so that the same source builds with both. */
+#ifndef TCL_SIZE_MAX
+typedef int Tcl_Size;
+#endif
 
 #define HPING_IF_MAX	8
 
@@ -59,17 +67,16 @@ static void HpingRecvCloseHandler(struct recv_handler *ra)
 	if (ra->rh_interp != NULL) {
 		Tcl_DeleteFileHandler(pcap_fileno(ra->rh_pcapfp));
 		Tcl_DecrRefCount(ra->rh_handlerscript);
+		ra->rh_handlerscript = NULL;
 	}
 	pcap_close(ra->rh_pcapfp);
+	ra->rh_pcapfp = NULL;
 	ra->rh_interp = NULL;
 }
 
 static struct recv_handler *HpingRecvGetHandler(struct recv_handler *ra, int len, char *ifname, Tcl_Interp *interp)
 {
 	int i;
-	#if (!defined OSTYPE_LINUX) && (!defined __sun__)
-	int on = 1;
-	#endif
 
 	for (i = 0; i < len; i++) {
 		if (!ra[i].rh_ifname[0])
@@ -88,12 +95,15 @@ static struct recv_handler *HpingRecvGetHandler(struct recv_handler *ra, int len
 	ra[i].rh_pcapfp = pcap_open_live(ifname, 99999, 0, 1, ra[i].rh_pcap_errbuf);
 	if (ra[i].rh_pcapfp == NULL)
 		return NULL;
-	#if (!defined OSTYPE_LINUX) && (!defined __sun__)
-	/* Return the packets to userspace as fast as possible */
-	if (ioctl(pcap_fileno(ra[i].rh_pcapfp), BIOCIMMEDIATE, &on) == -1) {
-		/* XXX non-critical error */
+#ifdef BIOCIMMEDIATE
+	{
+		int on = 1;
+		/* Return the packets to userspace as fast as possible */
+		if (ioctl(pcap_fileno(ra[i].rh_pcapfp), BIOCIMMEDIATE, &on) == -1) {
+			/* XXX non-critical error */
+		}
 	}
-	#endif
+#endif
 	strlcpy(ra[i].rh_ifname, ifname, HPING_IFNAME_LEN);
 	ra[i].rh_interp = NULL;
 	ra[i].rh_linkhdrsize = dltype_to_lhs(pcap_datalink(ra[i].rh_pcapfp));
@@ -220,26 +230,28 @@ static int HpingSendRawCmd(ClientData clientData, Tcl_Interp *interp,
 	int error;
 	Tcl_Obj *result;
 	struct sockaddr_in sa;
-	char *pkt;
-	int pktlen;
-	struct ars_iphdr *ip;
+	unsigned char *pkt;
+	Tcl_Size pktlen;
+	struct ars_iphdr ip;
 
 	if (objc != 3) {
 		Tcl_WrongNumArgs(interp, 2, objv, "data");
 		return TCL_ERROR;
 	}
 	result = Tcl_GetObjResult(interp);
-	/* Get packet data */
-	pkt = Tcl_GetStringFromObj(objv[2], &pktlen);
+	/* Get packet data: binary, as returned by 'hping recvraw' or
+	 * built with the 'binary' Tcl command */
+	pkt = Tcl_GetByteArrayFromObj(objv[2], &pktlen);
 	/* Check if the packet is too short */
-	if (pktlen < sizeof(struct ars_iphdr)) {
+	if (pktlen < (Tcl_Size) sizeof(struct ars_iphdr)) {
 		Tcl_SetStringObj(result, "Packet shorter than IPv4 header", -1);
 		return TCL_ERROR;
 	}
-	ip = (struct ars_iphdr*) pkt;
+	memcpy(&ip, pkt, sizeof(ip)); /* alignment safe copy */
 	/* Get the destination IP from the packet itself */
+	memset(&sa, 0, sizeof(sa));
 	sa.sin_family = AF_INET;
-	memcpy(&sa.sin_addr.s_addr, &ip->daddr, 4);
+	memcpy(&sa.sin_addr.s_addr, &ip.daddr, 4);
 	/* Open the rawsocket if needed */
 	if (rawsocket == -1) {
 		rawsocket = ars_open_rawsocket(NULL);
@@ -260,26 +272,43 @@ static int HpingSendRawCmd(ClientData clientData, Tcl_Interp *interp,
 }
 
 #define APD_MAX_LEN (65536*2+4096)
-char *GetPacketDescription(char *data, int len, int hexdata)
+/* Convert a raw IP packet into its APD description.
+ * Returns a malloc()ed string, or NULL on error: in that case, when
+ * 'interp' is not NULL, its result holds the error message. */
+char *GetPacketDescription(Tcl_Interp *interp, unsigned char *data, int len, int hexdata)
 {
-	unsigned char *p = (char*)data;
 	struct ars_packet pkt;
-	char *d = malloc(APD_MAX_LEN);
+	char *d;
 	char *ret;
 
+	if (len < 0)
+		return NULL;
+	d = malloc(APD_MAX_LEN);
+	if (d == NULL) {
+		if (interp)
+			Tcl_SetResult(interp, "Out of memory", TCL_STATIC);
+		return NULL;
+	}
 	ars_init(&pkt);
 	if (hexdata) {
 		ars_set_option(&pkt, ARS_OPT_RAPD_HEXDATA);
 	}
-	if (ars_split_packet(p, len, 0, &pkt) != -ARS_OK) {
-		/* FIXME: handle this error properly */
-	}
-	if (ars_d_from_ars(d, APD_MAX_LEN, &pkt) != -ARS_OK) {
-		/* FIXME: handle this error properly */
+	if (ars_split_packet(data, len, 0, &pkt) != -ARS_OK ||
+	    ars_d_from_ars(d, APD_MAX_LEN, &pkt) != -ARS_OK) {
+		if (interp) {
+			Tcl_ResetResult(interp);
+			Tcl_AppendResult(interp, "Packet description error: ",
+				pkt.p_error ? pkt.p_error : "unknown", NULL);
+		}
+		ars_destroy(&pkt);
+		free(d);
+		return NULL;
 	}
 	ars_destroy(&pkt);
 	ret = strdup(d);
 	free(d);
+	if (ret == NULL && interp)
+		Tcl_SetResult(interp, "Out of memory", TCL_STATIC);
 	return ret;
 }
 
@@ -296,50 +325,81 @@ int pcap_read(pcap_t *, int cnt, pcap_handler, u_char *); /* pcap-int.h */
 static int HpingReadPacket(struct recv_handler *ra, char *pkt, int pktlen, int timeout)
 {
 	struct timeval tv;
-	int retval, fd = pcap_fileno(ra->rh_pcapfp);
-	struct pcap_pkthdr hdr;
+	int retval, fd = pcap_get_selectable_fd(ra->rh_pcapfp);
+	struct pcap_pkthdr *hdr;
 	const unsigned char *d;
 	fd_set fs;
 
-	if (timeout >= 0) {
-		tv.tv_sec = timeout/1000;
-		tv.tv_usec = (timeout%1000)*1000;
-	}
-	FD_ZERO(&fs);
-	FD_SET(fd, &fs);
-	if (timeout >= 0)
-		retval = select(fd+1, &fs, NULL, NULL, &tv);
-	else
-		retval = select(fd+1, &fs, NULL, NULL, NULL);
-	if (retval == -1) {
-		if (errno == EINTR)
+	if (fd >= 0) {
+		if (fd >= FD_SETSIZE)
+			return -1;
+		if (timeout >= 0) {
+			tv.tv_sec = timeout/1000;
+			tv.tv_usec = (timeout%1000)*1000;
+		}
+		FD_ZERO(&fs);
+		FD_SET(fd, &fs);
+		if (timeout >= 0)
+			retval = select(fd+1, &fs, NULL, NULL, &tv);
+		else
+			retval = select(fd+1, &fs, NULL, NULL, NULL);
+		if (retval == -1) {
+			if (errno == EINTR)
+				return 0;
+			return -1;
+		} else if (retval == 0) {
 			return 0;
-		return -1;
-	} else if (retval == 0) {
-		return 0;
+		}
 	}
-	d = pcap_next(ra->rh_pcapfp, &hdr);
-	if (d == NULL)
-		return 0;
-	if (hdr.caplen > pktlen)
-		hdr.caplen = pktlen;
-	memcpy(pkt, d, hdr.caplen);
-	return hdr.caplen;
+	/* No selectable descriptor (savefile, dead handle, or a capture
+	 * backend without one): read directly, pcap's own timeout applies. */
+	retval = pcap_next_ex(ra->rh_pcapfp, &hdr, &d);
+	if (retval == 0)
+		return 0; /* timeout */
+	if (retval < 0)
+		return -1; /* error, or end of savefile */
+	if (pktlen < 0)
+		return -1;
+	if (hdr->caplen > (unsigned int) pktlen) {
+		memcpy(pkt, d, pktlen); /* truncated to the buffer size */
+		return pktlen;
+	}
+	memcpy(pkt, d, hdr->caplen);
+	return (int) hdr->caplen;
 }
 
+#define HPING_RECV_BUFSZ (65535+255)
+
+/* Read packets from 'ra' appending them (raw, or as APD descriptions when
+ * 'rapd' is set) to the Tcl list 'o'. See __HpingRecvCmd() for the timeout
+ * and maxpackets semantics. Returns 0 on success, 1 on error (with the
+ * error message in the interpreter result). */
 static int HpingRecvPackets(struct recv_handler *ra, Tcl_Interp *interp, Tcl_Obj *o, int timeout, int maxpackets, int rapd, int hexdata)
 {
-	time_t startms = milliseconds();
-	char _pkt[65535+255];
-	char *pkt = _pkt;
+	long long startms = mstime();
+	char _pkt[HPING_RECV_BUFSZ];
 	int lhs = ra->rh_linkhdrsize;
 
+	if (lhs < 0) {
+		Tcl_SetResult(interp, "Unknown link layer header size for this interface", TCL_STATIC);
+		return 1;
+	}
 	while(1) {
-		time_t elapsed;
+		long long elapsed;
 		int len;
+		/* Every packet is read at the start of the buffer, with the
+		 * whole buffer available: 'pkt' and 'len' only describe the
+		 * IP datagram of the current packet. */
+		char *pkt = _pkt;
 
-		len = HpingReadPacket(ra, pkt, 65535+255, timeout);
-		if (len > 0) {
+		len = HpingReadPacket(ra, _pkt, HPING_RECV_BUFSZ, timeout);
+		if (len < 0) {
+			Tcl_ResetResult(interp);
+			Tcl_AppendResult(interp, "Error reading packets: ",
+				pcap_geterr(ra->rh_pcapfp), NULL);
+			return 1;
+		}
+		if (len > lhs) {
 			Tcl_Obj *element;
 
 			/* Skip the link header */
@@ -349,13 +409,13 @@ static int HpingRecvPackets(struct recv_handler *ra, Tcl_Interp *interp, Tcl_Obj
 			if (rapd) {
 				char *apd;
 
-				apd = GetPacketDescription(pkt, len, hexdata);
+				apd = GetPacketDescription(interp, (unsigned char*) pkt, len, hexdata);
 				if (!apd)
 					return 1;
 				element = Tcl_NewStringObj(apd, -1);
 				free(apd);
 			} else {
-				element = Tcl_NewStringObj(pkt, len);
+				element = Tcl_NewByteArrayObj((unsigned char*) pkt, len);
 			}
 			Tcl_ListObjAppendElement(interp, o, element);
 			/* Check if we reached the packets limit */
@@ -364,11 +424,14 @@ static int HpingRecvPackets(struct recv_handler *ra, Tcl_Interp *interp, Tcl_Obj
 				if (maxpackets == 0)
 					return 0;
 			}
+		} else if (len > 0) {
+			/* A frame shorter than the link header: skip it */
+			len = 0;
 		}
 		if (timeout == 0 && len != 0)
 			continue;
 		if (timeout >= 0) {
-			elapsed = milliseconds() - startms;
+			elapsed = mstime() - startms;
 			if (elapsed > timeout)
 				break;
 		}
@@ -397,10 +460,14 @@ static int __HpingRecvCmd(ClientData clientData, Tcl_Interp *interp,
 	}
 	result = Tcl_GetObjResult(interp);
 	ifname = Tcl_GetStringFromObj(objv[2], NULL);
-	if (objc >= 4)
-		Tcl_GetIntFromObj(interp, objv[3], &timeout);
-	if (objc == 5)
-		Tcl_GetIntFromObj(interp, objv[4], &maxpackets);
+	if (objc >= 4 && Tcl_GetIntFromObj(interp, objv[3], &timeout) != TCL_OK)
+		return TCL_ERROR;
+	if (objc == 5 && Tcl_GetIntFromObj(interp, objv[4], &maxpackets) != TCL_OK)
+		return TCL_ERROR;
+	if (maxpackets < 0) {
+		Tcl_SetStringObj(result, "maxpackets must be >= 0", -1);
+		return TCL_ERROR;
+	}
 	/* FIXME: check if maxpacket == 0 AND timeout == -1. In such
 	 * a case the function will never return. */
 	ra = HpingRecvGetHandler(recv_handlers, HPING_IFACE_MAX, ifname, interp);
@@ -555,7 +622,8 @@ static int HpingGetFieldCmd(ClientData clientData, Tcl_Interp *interp,
 	layer = Tcl_GetStringFromObj(objv[2], NULL);
 	field = Tcl_GetStringFromObj(objv[3], NULL);
 	if (objc == 6) {
-		Tcl_GetIntFromObj(interp, objv[4], &skip);
+		if (Tcl_GetIntFromObj(interp, objv[4], &skip) != TCL_OK)
+			return TCL_ERROR;
 		packet = Tcl_GetStringFromObj(objv[5], NULL);
 	} else {
 		packet = Tcl_GetStringFromObj(objv[4], NULL);
@@ -584,7 +652,8 @@ static int HpingHasFieldCmd(ClientData clientData, Tcl_Interp *interp,
 	layer = Tcl_GetStringFromObj(objv[2], NULL);
 	field = Tcl_GetStringFromObj(objv[3], NULL);
 	if (objc == 6) {
-		Tcl_GetIntFromObj(interp, objv[4], &skip);
+		if (Tcl_GetIntFromObj(interp, objv[4], &skip) != TCL_OK)
+			return TCL_ERROR;
 		packet = Tcl_GetStringFromObj(objv[5], NULL);
 	} else {
 		packet = Tcl_GetStringFromObj(objv[4], NULL);
@@ -600,7 +669,7 @@ static int HpingHasFieldCmd(ClientData clientData, Tcl_Interp *interp,
 static int HpingSetFieldCmd(ClientData clientData, Tcl_Interp *interp,
 		int objc, Tcl_Obj *CONST objv[])
 {
-	char *layer, *field, *value, *packet;
+	char *layer, *field, *packet;
 	int skip = 0, vstart, vend;
 	Tcl_Obj *result;
 
@@ -611,9 +680,10 @@ static int HpingSetFieldCmd(ClientData clientData, Tcl_Interp *interp,
 	result = Tcl_GetObjResult(interp);
 	layer = Tcl_GetStringFromObj(objv[2], NULL);
 	field = Tcl_GetStringFromObj(objv[3], NULL);
-	value = Tcl_GetStringFromObj(objv[4], NULL);
+	/* the value is objv[4], appended as an object below */
 	if (objc == 7) {
-		Tcl_GetIntFromObj(interp, objv[5], &skip);
+		if (Tcl_GetIntFromObj(interp, objv[5], &skip) != TCL_OK)
+			return TCL_ERROR;
 		packet = Tcl_GetStringFromObj(objv[6], NULL);
 	} else {
 		packet = Tcl_GetStringFromObj(objv[5], NULL);
@@ -644,7 +714,8 @@ static int HpingDelFieldCmd(ClientData clientData, Tcl_Interp *interp,
 	layer = Tcl_GetStringFromObj(objv[2], NULL);
 	field = Tcl_GetStringFromObj(objv[3], NULL);
 	if (objc == 6) {
-		Tcl_GetIntFromObj(interp, objv[4], &skip);
+		if (Tcl_GetIntFromObj(interp, objv[4], &skip) != TCL_OK)
+			return TCL_ERROR;
 		packet = Tcl_GetStringFromObj(objv[5], NULL);
 	} else {
 		packet = Tcl_GetStringFromObj(objv[4], NULL);
@@ -674,7 +745,7 @@ static int HpingChecksumCmd(ClientData clientData, Tcl_Interp *interp,
 	Tcl_Obj *result;
 	u_int16_t cksum;
 	char *data;
-	int len;
+	Tcl_Size len;
 
 	result = Tcl_GetObjResult(interp);
 
@@ -741,7 +812,7 @@ static int HpingEventCmd(ClientData clientData, Tcl_Interp *interp,
 	struct recv_handler *ra;
 	char *ifname;
 	Tcl_Obj *result;
-	int scriptlen;
+	Tcl_Size scriptlen;
 
 	result = Tcl_GetObjResult(interp);
 	if (objc != 3 && objc != 4) {
@@ -763,18 +834,26 @@ static int HpingEventCmd(ClientData clientData, Tcl_Interp *interp,
 		return TCL_OK;
 	}
 	/* Set the script in the target interface */
-	if (ra->rh_interp != NULL)
+	if (ra->rh_interp != NULL) {
 		Tcl_DecrRefCount(ra->rh_handlerscript);
+		ra->rh_handlerscript = NULL;
+	}
 	/* CHeck if the script is empty, if so clear the handler */
 	Tcl_GetStringFromObj(objv[3], &scriptlen);
 	if (scriptlen != 0) {
 		ra->rh_handlerscript = objv[3];
 		Tcl_IncrRefCount(objv[3]);
 		ra->rh_interp = interp;
-		/* Register the handler for this file descriptor */
+		/* Register the handler for this file descriptor
+		 * (replaces a previously registered one, if any) */
 		Tcl_CreateFileHandler(pcap_fileno(ra->rh_pcapfp), TCL_READABLE,
 				HpingEventHandler, (void*)ra);
 	} else {
+		/* An empty script removes the event handler: the file
+		 * handler must go too, otherwise the event loop keeps
+		 * calling HpingEventHandler() with a NULL interpreter. */
+		if (ra->rh_interp != NULL)
+			Tcl_DeleteFileHandler(pcap_fileno(ra->rh_pcapfp));
 		ra->rh_interp = NULL;
 	}
 	return TCL_OK;
@@ -970,12 +1049,12 @@ struct Tcl_ObjType tclMpzType = {
  * 'val'. If 'val' == NULL, the mpz object is set to zero. */
 void Tcl_SetMpzObj(Tcl_Obj *objPtr, mpz_ptr val)
 {
-	Tcl_ObjType *typePtr;
+	const Tcl_ObjType *typePtr;
 	mpz_ptr mpzPtr;
 
 	/* It's not a good idea to set a shared object... */
 	if (Tcl_IsShared(objPtr)) {
-		panic("Tcl_SetMpzObj called with shared object");
+		Tcl_Panic("Tcl_SetMpzObj called with shared object");
 	}
 	/* Free the old object private data and invalidate the string
 	 * representation. */
@@ -988,7 +1067,7 @@ void Tcl_SetMpzObj(Tcl_Obj *objPtr, mpz_ptr val)
 	mpzPtr = (mpz_ptr) ckalloc(sizeof(struct struct_sbnz));
 	mpz_init(mpzPtr);
 	if (val && mpz_set(mpzPtr, val) != SBN_OK) {
-		panic("Out of memory in Tcl_SetMpzObj");
+		Tcl_Panic("Out of memory in Tcl_SetMpzObj");
 	}
 	/* Set it as object private data, and type */
 	objPtr->typePtr = &tclMpzType;
@@ -1008,7 +1087,7 @@ int Tcl_GetMpzFromObj(struct Tcl_Interp *interp, Tcl_Obj *objPtr, mpz_ptr *mpzPt
 		if (result != TCL_OK)
 			return result;
 	}
-	*mpzPtrPtr = (mpz_ptr) objPtr->internalRep.longValue;
+	*mpzPtrPtr = (mpz_ptr) objPtr->internalRep.otherValuePtr;
 	return TCL_OK;
 }
 
@@ -1041,7 +1120,7 @@ void DupMpzInternalRep(Tcl_Obj *srcPtr, Tcl_Obj *copyPtr)
 	mpz_init(mpzCopyPtr);
 	mpzSrcPtr = (mpz_ptr) srcPtr->internalRep.otherValuePtr;
 	if (mpz_set(mpzCopyPtr, mpzSrcPtr) != SBN_OK)
-		panic("Out of memory inside DupMpzInternalRep()");
+		Tcl_Panic("Out of memory inside DupMpzInternalRep()");
 	copyPtr->internalRep.otherValuePtr = (void*) mpzCopyPtr;
 	copyPtr->typePtr = &tclMpzType;
 }
@@ -1066,7 +1145,7 @@ int SetMpzFromAny(struct Tcl_Interp* interp, Tcl_Obj *objPtr)
 	char *s;
 	mpz_t t;
 	mpz_ptr mpzPtr;
-	Tcl_ObjType *typePtr;
+	const Tcl_ObjType *typePtr;
 
 	if (objPtr->typePtr == &tclMpzType)
 		return TCL_OK;
@@ -1250,7 +1329,7 @@ static int BigSrandObjCmd(ClientData clientData, Tcl_Interp *interp,
 		int objc, Tcl_Obj *CONST objv[])
 {
 	char *seed;
-	int len;
+	Tcl_Size len;
 
 	if (objc != 2) {
 		Tcl_WrongNumArgs(interp, 1, objv, "seed-string");
