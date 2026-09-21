@@ -33,6 +33,24 @@
  * BIOCIMMEDIATE ioctl does the same. */
 int open_pcap()
 {
+	/* --read: dissect a pcap savefile instead of a live interface.
+	 * No privileges, no traffic; the event loop reads it to EOF. The
+	 * link-layer type comes from the file (get_linkhdr_size uses it). */
+	if (cfg.readfile != NULL) {
+		if (cfg.opt_debug)
+			printf("DEBUG: pcap_open_offline(%s)\n", cfg.readfile);
+		ctx.pcapfp = pcap_open_offline(cfg.readfile, ctx.errbuf);
+		if (ctx.pcapfp == NULL) {
+			fprintf(stderr, "[open_pcap] %s\n", ctx.errbuf);
+			return -1;
+		}
+		/* a savefile has no selectable descriptor: the loop reads it
+		 * without blocking (pcap_next_ex returns -2 at EOF) */
+		ctx.pcap_fd = -1;
+		ctx.pcap_poll_ms = 0;
+		return 0;
+	}
+
 	if (cfg.opt_debug)
 		printf("DEBUG: pcap_open(%s, 65535+link, no promisc, immediate)\n",
 			cfg.ifname);

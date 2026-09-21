@@ -118,6 +118,81 @@ if command -v strace >/dev/null; then
 	check "`strace -f -qq -e trace=socket $H --dry-run -c 1 -S 10.0.0.2 2>&1 >/dev/null | grep -c 'SOCK_RAW'`" 0 "--dry-run opens no raw socket"
 fi
 
+# --json: stdout is only NDJSON (one JSON object per line), banner and
+# diagnostics go to stderr; --dry-run keeps it unprivileged
+jout=`$H --json --dry-run -c 2 -S -p 80 10.0.0.1 2>/dev/null`; rc=$?
+check "$rc" 0 "--json --dry-run exit status"
+# every stdout line begins with { and ends with }
+nonjson=`printf '%s
+' "$jout" | grep -vc '^{.*}$'`
+check "$nonjson" 0 "--json stdout is only JSON objects"
+check "`printf '%s
+' "$jout" | grep -c '"type":"packet"'`" 2 "--json emits two packet events"
+check "`printf '%s
+' "$jout" | grep -c '"type":"statistics"'`" 1 "--json emits one statistics event"
+check "`printf '%s
+' "$jout" | grep -c '"schema":1'`" 3 "--json every event carries the schema"
+# the banner is a diagnostic: stderr, not stdout
+check "`printf '%s
+' "$jout" | grep -c STYXWIRE`" 0 "--json banner not on stdout"
+check "`$H --json --dry-run -c 1 -S 10.0.0.1 2>&1 >/dev/null | grep -c STYXWIRE`" 1 "--json banner on stderr"
+# the statistics event: 2 sent, none received (dry-run), loss 100, rtt null
+check "`printf '%s
+' "$jout" | grep '"type":"statistics"' | grep -c '"sent":2'`" 1 "--json statistics sent count"
+check "`printf '%s
+' "$jout" | grep '"type":"statistics"' | grep -c '"rtt_min_ms":null'`" 1 "--json statistics rtt null when no reply"
+if command -v python3 >/dev/null; then
+	check "`printf '%s
+' "$jout" | python3 -c 'import sys,json
+n=0
+for l in sys.stdin:
+    l=l.strip()
+    if l: json.loads(l); n+=1
+print(n)'`" 3 "--json output parses as 3 JSON objects"
+fi
+
+# --read: dissect a pcap savefile offline (no root, no send). Needs python3
+# to write the fixture; skipped otherwise.
+if command -v python3 >/dev/null; then
+	pcap=`mktemp "${TMPDIR:-/tmp}/styx-read.XXXXXX"`
+	python3 - "$pcap" <<'PY'
+import struct,sys
+def ck(b):
+    if len(b)%2: b+=b'\x00'
+    s=sum(struct.unpack('!%dH'%(len(b)//2),b))
+    while s>>16: s=(s&0xffff)+(s>>16)
+    return (~s)&0xffff
+sa=bytes([10,0,0,2]); da=bytes([10,0,0,1])
+ip=bytearray(20); ip[0]=0x45; ip[2:4]=struct.pack('!H',40); ip[4:6]=struct.pack('!H',0x1234)
+ip[8]=64; ip[9]=6; ip[12:16]=sa; ip[16:20]=da; ip[10:12]=struct.pack('!H',ck(bytes(ip)))
+tcp=bytearray(20); tcp[0:2]=struct.pack('!H',80); tcp[2:4]=struct.pack('!H',5000)
+tcp[12]=0x50; tcp[13]=0x12; tcp[14:16]=struct.pack('!H',512)
+tcp[16:18]=struct.pack('!H',ck(sa+da+b'\x00\x06'+struct.pack('!H',20)+bytes(tcp)))
+pkt=bytes(ip)+bytes(tcp)
+with open(sys.argv[1],'wb') as f:
+    f.write(struct.pack('!IHHiIII',0xa1b2c3d4,2,4,0,0,65535,101))
+    f.write(struct.pack('!IIII',0,0,len(pkt),len(pkt))); f.write(pkt)
+PY
+	# analyse the capture: the SYN+ACK from 10.0.0.2:80 is matched, no packet sent
+	rout=`$H --read "$pcap" --json -S -p 80 -a 10.0.0.1 10.0.0.2 2>/dev/null`; rc=$?
+	check "$rc" 0 "--read exit status (no root)"
+	check "`printf '%s
+' "$rout" | grep -c '"type":"reply"'`" 1 "--read dissects the reply"
+	check "`printf '%s
+' "$rout" | grep '"type":"reply"' | grep -c '"flags":"SA"'`" 1 "--read reply flags SA"
+	check "`printf '%s
+' "$rout" | grep '"type":"reply"' | grep -c '"rtt_ms":null'`" 1 "--read rtt is null (nothing was sent)"
+	check "`printf '%s
+' "$rout" | grep '"type":"statistics"' | grep -c '"sent":0'`" 1 "--read sends nothing"
+	if command -v strace >/dev/null; then
+		check "`strace -f -qq -e trace=socket $H --read "$pcap" -S -p 80 -a 10.0.0.1 10.0.0.2 2>&1 >/dev/null | grep -c SOCK_RAW`" 0 "--read opens no raw socket"
+	fi
+	# a missing file is a clean error, exit 1
+	$H --read /no/such/file.pcap -a 10.0.0.1 10.0.0.2 >/dev/null 2>&1
+	check "$?" 1 "--read of a missing file fails"
+	rm -f "$pcap"
+fi
+
 # unknown / ambiguous options
 out=`$H --no-such-option 192.0.2.1 2>&1`; rc=$?
 check "$rc" 1 "unknown option"

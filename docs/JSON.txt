@@ -1,0 +1,66 @@
+StyxWire --json output (NDJSON)
+===============================
+
+With --json, StyxWire writes one JSON object per line to standard output
+(newline-delimited JSON). Every diagnostic, warning and the banner go to
+standard error, so a consumer can read stdout as a pure event stream:
+
+    styxwire --json -S -p 80 target | while read -r line; do ...; done
+
+A value that is not known is emitted as JSON null, never as a misleading
+zero (for example rtt_ms of a reply that matched no probe, or the RTT
+figures in the statistics when no round trip was measured).
+
+COMMON FIELDS (every event)
+    schema   integer   the schema version, currently 1
+    type     string    the event type (see below)
+    ts       integer   wall-clock time of the event, milliseconds since
+                       the Unix epoch
+
+EVENT TYPES
+
+  "reply" -- a reply matched the target and the port filter
+    proto      "tcp" | "udp" | "icmp"
+    len        integer   captured IP datagram length (as shown by "len=")
+    ip         string    source IP address
+    ttl        integer   IP TTL
+    id         integer   IP id (relativised when --rel, see rel)
+    rel        bool      true if id is a relative value (--rel)
+    df         bool      the fragment-offset/DF field was non-zero
+    dup        bool      a duplicate reply (the probe was already answered)
+    tos        integer   IP type of service
+    iplen      integer   IP total-length field
+    rtt_ms     number|null   round trip time in ms, null if unmatched
+    -- tcp adds:  sport, flags (string like "SA"), seq (styxwire seq),
+       win, tcpseq, tcpack
+    -- udp adds:  sport, seq
+    -- icmp adds: icmp_seq, icmp_type
+
+  "icmp-unreachable" -- an ICMP destination-unreachable for our target
+    ip, ttl, code (integer), codename (string, e.g. "port-unreachable")
+
+  "icmp-timeexceeded" -- an ICMP time-exceeded for our target
+    ip, ttl, code; in traceroute mode also hop (integer) and
+    rtt_ms (number|null)
+
+  "packet" -- a built packet under --dry-run (nothing was sent)
+    to (string, destination IP), bytes (integer), hex (string)
+
+  "statistics" -- printed once at the end
+    target      string
+    sent, received, duplicates, unmatched, unique   integers
+    loss_percent   integer   (sent - unique) * 100 / sent, 0 when sent==0
+    out_of_sequence  integer  (only present with --rel, when non-zero)
+    rtt_min_ms, rtt_avg_ms, rtt_max_ms   number|null (null if no sample)
+
+NOTES
+  - Under --json the human reply lines and the human statistics block are
+    replaced by these events; the exit status is unchanged.
+  - --json combines with --dry-run (packets are "packet" events, no
+    socket, no root) and with --read file.pcap (offline dissection of a
+    savefile; replies have rtt_ms null because nothing was sent).
+  - The hex dump options (-j/-J) are not represented in JSON yet; use the
+    "packet" event (--dry-run) or --read for byte-level data.
+  - Fields may be added in a future schema; a consumer should ignore
+    unknown keys. The schema integer is bumped only on incompatible
+    changes.

@@ -99,6 +99,7 @@ struct hping_config {
 			opt_beep,
 			opt_flood,
 			opt_dry_run,
+			opt_json,
 			opt_force_icmp;
 
 	/* values with a run time life of their own, initialised from the
@@ -137,6 +138,7 @@ struct hping_config {
 			sign[1024];
 	char		*opt_scanports;		/* --scan argument (malloc'ed or "") */
 	char		*apd_send;		/* --apd-send description (malloc'ed) */
+	char		*readfile;		/* -r/--read pcap savefile (malloc'ed) */
 
 	/* source routes (--lsrr/--ssrr), already in IP option format */
 	unsigned char	lsr[255],

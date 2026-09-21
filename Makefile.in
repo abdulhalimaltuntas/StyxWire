@@ -47,7 +47,7 @@ OBJ=	main.o globals.o getifname.o getlhs.o \
 	display_ipopt.o sendrawip.o send.o \
 	strlcpy.o arsglue.o random.o scan.o lifecycle.o \
 	hstring.o script.o interface.o \
-	adbuf.o hex.o apdutils.o sbignum.o \
+	adbuf.o hex.o apdutils.o sbignum.o output.o \
 	sbignum-tables.o $(ARSOBJ)
 
 PROG = styxwire
@@ -88,7 +88,7 @@ dep: .depend
 #  - the object of the source a test #includes to reach static functions
 TEST_COMMON_OBJ = $(filter-out main.o sendip_handler.o waitpacket.o scan.o script.o,$(OBJ))
 TEST_LINK = tests/stub_send.o $(TEST_COMMON_OBJ)
-TEST_BINS = tests/test_core tests/test_waitpacket tests/test_scan tests/test_loop tests/test_parse
+TEST_BINS = tests/test_core tests/test_waitpacket tests/test_scan tests/test_loop tests/test_parse tests/test_output
 TEST_BINS_TCL_-DUSE_TCL = tests/test_script
 TEST_BINS_TCL_ =
 TEST_BINS_TCL = $(TEST_BINS_TCL_$(USE_TCL))
@@ -105,6 +105,9 @@ tests/test_loop: tests/test_loop.c tests/testutil.h tests/stub_send.h $(TEST_LIN
 
 tests/test_parse: tests/test_parse.c tests/testutil.h $(TEST_LINK) waitpacket.o scan.o script.o
 	$(TEST_CC) -o $@ tests/test_parse.c $(TEST_LINK) waitpacket.o scan.o script.o $(ALL_LDLIBS)
+
+tests/test_output: tests/test_output.c tests/testutil.h $(TEST_LINK) waitpacket.o scan.o script.o
+	$(TEST_CC) -o $@ tests/test_output.c $(TEST_LINK) waitpacket.o scan.o script.o $(ALL_LDLIBS)
 
 tests/test_waitpacket: tests/test_waitpacket.c tests/testutil.h waitpacket.c $(TEST_LINK) scan.o script.o
 	$(TEST_CC) -o $@ tests/test_waitpacket.c $(TEST_LINK) scan.o script.o $(ALL_LDLIBS)
@@ -155,7 +158,7 @@ tests/fuzz_opts: tests/fuzz/fuzz_opts.c $(FUZZ_APP_OBJ)
 # cleaning
 # ---------------------------------------------------------------------------
 clean:
-	rm -rf $(PROG) $(PROG)-static hping3 *.o libars.a tests/*.o $(TEST_BINS) tests/test_script tests/test_loop tests/test_parse tests/libars_link tests/fuzz_split tests/fuzz_apd
+	rm -rf $(PROG) $(PROG)-static hping3 *.o libars.a tests/*.o $(TEST_BINS) tests/test_script tests/test_loop tests/test_parse tests/test_output tests/libars_link tests/fuzz_split tests/fuzz_apd
 
 distclean: clean
 	rm -rf byteorder byteorder.h systype.h Makefile .depend .configure-tmp

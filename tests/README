@@ -15,6 +15,8 @@ Offline test-suite for hping3 -- run with "make check" from the top dir.
                      partial init cleanup, the real poll()/pcap path on a
                      savefile and a real SIGINT waking poll() up.
   test_parse.c       parse_options() as a function: argv in, cfg out.
+  test_output.c      the NDJSON serializer (output.c): escaping, null vs
+                     zero, IPv4 fields, 64-bit counters.
   test_script.c      Tcl binding (built with Tcl only): multi-packet
                      'hping recv', 'recvraw' byte arrays, field commands,
                      argument validation, bignum commands.

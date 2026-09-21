@@ -19,6 +19,7 @@
 
 #include "hping2.h"
 #include "globals.h"
+#include "output.h"
 
 static int icmp_unreach_rtt(void *quoted_ip, int size,
 			    int *seqp, float *ms_delay);
@@ -33,6 +34,53 @@ static void handle_hcmp(char *packet, int size);
 static struct myiphdr ip;
 static int ip_size;
 static struct in_addr src, dst;
+
+/* --- structured (--json) reply/error events -------------------------- *
+ * These mirror the fields of the human output; a value that matched no
+ * probe (status S_UNKNOWN) is emitted as a null rtt, never as 0. */
+
+/* Emit the IP-level fields shared by every reply, like log_ip() prints. */
+static void json_ip_fields(int status, int seq)
+{
+	int rel_id, ip_id;
+
+	ip_id = cfg.opt_winid_order ? ip.id : htons(ip.id);
+	if (cfg.opt_relid)
+		rel_id = relativize_id(seq, &ip_id);
+	else
+		rel_id = 0;
+	out_int("len", ip_size);
+	out_ipv4("ip", src.s_addr);
+	out_int("ttl", ip.ttl);
+	out_int("id", ip_id);
+	out_bool("rel", rel_id != 0);
+	out_bool("df", ntohs(ip.frag_off) != 0);
+	out_bool("dup", status == S_RECV);
+	out_int("tos", ip.tos);
+	out_int("iplen", htons(ip.tot_len));
+}
+
+static void json_rtt(int status, float ms)
+{
+	if (status == S_UNKNOWN)
+		out_null("rtt_ms");
+	else
+		out_double("rtt_ms", ms);
+}
+
+static const char *icmp_unreach_name(int code)
+{
+	switch (code) {
+	case 0: return "net-unreachable";
+	case 1: return "host-unreachable";
+	case 2: return "protocol-unreachable";
+	case 3: return "port-unreachable";
+	case 4: return "frag-needed";
+	case 5: return "source-route-failed";
+	case 13: return "filtered";
+	default: return "unreachable";
+	}
+}
 
 /* This function is called for every matching packet received.
  * If --beep option was specified, the user will hear a beep
@@ -253,6 +301,16 @@ int recv_icmp(void *packet, size_t size)
 		/* obtain round trip time */
 		status = rtt(&icmp_seq, 0, &ms_delay);
 		hping_stats_on_reply(status);
+		if (output_json_enabled()) {
+			out_begin("reply");
+			out_str("proto", "icmp");
+			json_ip_fields(status, icmp_seq);
+			out_int("icmp_seq", icmp_seq);
+			out_int("icmp_type", icmp.type);
+			json_rtt(status, ms_delay);
+			out_end();
+			return 1;
+		}
 		log_ip(status, icmp_seq);
 
 		printf("icmp_seq=%d rtt=%.1f ms\n", icmp_seq, ms_delay);
@@ -294,11 +352,30 @@ int recv_icmp(void *packet, size_t size)
 		/* Now we can handle the specific type */
 		switch(icmp.type) {
 		case 3:
-			if (!cfg.opt_quiet)
+			if (output_json_enabled()) {
+				out_begin("icmp-unreachable");
+				out_ipv4("ip", src.s_addr);
+				out_int("ttl", ip.ttl);
+				out_int("code", icmp.code);
+				out_str("codename", icmp_unreach_name(icmp.code));
+				out_end();
+			} else if (!cfg.opt_quiet)
 				log_icmp_unreach(inet_ntoa(src), icmp.code);
 			return 1;
 		case 11:
-			if (cfg.opt_traceroute)
+			if (output_json_enabled()) {
+				out_begin("icmp-timeexceeded");
+				out_ipv4("ip", src.s_addr);
+				out_int("ttl", ip.ttl);
+				out_int("code", icmp.code);
+				if (cfg.opt_traceroute) {
+					out_int("hop", cfg.src_ttl);
+					json_rtt(status, hop_rtt);
+					if (!cfg.opt_tr_keep_ttl)
+						cfg.src_ttl++;
+				}
+				out_end();
+			} else if (cfg.opt_traceroute)
 				log_traceroute(status, hop_rtt, icmp.code);
 			else
 				log_icmp_timeexc(inet_ntoa(src), icmp.code);
@@ -330,7 +407,15 @@ int recv_udp(void *packet, size_t size)
 		recv_beep();
 		status = rtt(&sequence, ntohs(udp.uh_dport), &ms_delay);
 		hping_stats_on_reply(status);
-		if (!cfg.opt_quiet) {
+		if (output_json_enabled()) {
+			out_begin("reply");
+			out_str("proto", "udp");
+			json_ip_fields(status, sequence);
+			out_int("sport", ntohs(udp.uh_sport));
+			out_int("seq", sequence);
+			json_rtt(status, ms_delay);
+			out_end();
+		} else if (!cfg.opt_quiet) {
 			log_ip(status, sequence);
 			printf("seq=%d rtt=%.1f ms\n", sequence, ms_delay);
 		}
@@ -365,6 +450,31 @@ int recv_tcp(void *packet, size_t size)
 
 		status = rtt(&sequence, ntohs(tcp.th_dport), &ms_delay);
 		hping_stats_on_reply(status);
+
+		if (output_json_enabled()) {
+			char jf[16];
+			jf[0] = '\0';
+			if (tcp.th_flags & TH_RST)  strcat(jf, "R");
+			if (tcp.th_flags & TH_SYN)  strcat(jf, "S");
+			if (tcp.th_flags & TH_ACK)  strcat(jf, "A");
+			if (tcp.th_flags & TH_FIN)  strcat(jf, "F");
+			if (tcp.th_flags & TH_PUSH) strcat(jf, "P");
+			if (tcp.th_flags & TH_URG)  strcat(jf, "U");
+			if (tcp.th_flags & TH_X)    strcat(jf, "X");
+			if (tcp.th_flags & TH_Y)    strcat(jf, "Y");
+			out_begin("reply");
+			out_str("proto", "tcp");
+			json_ip_fields(status, sequence);
+			out_int("sport", ntohs(tcp.th_sport));
+			out_str("flags", jf);
+			out_int("seq", sequence);
+			out_int("win", ntohs(tcp.th_win));
+			json_rtt(status, ms_delay);
+			out_uint("tcpseq", (unsigned long long) ntohl(tcp.th_seq));
+			out_uint("tcpack", (unsigned long long) ntohl(tcp.th_ack));
+			out_end();
+			goto out;
+		}
 
 		if (cfg.opt_seqnum) {
 			static __u32 old_th_seq = 0;

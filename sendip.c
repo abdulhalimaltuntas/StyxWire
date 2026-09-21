@@ -20,6 +20,7 @@
 
 #include "hping2.h"
 #include "globals.h"
+#include "output.h"
 
 /* Build the IP header around 'data' and write the datagram to the raw
  * socket. Returns 0 on success, -1 when it could not be sent (the caller
@@ -113,14 +114,26 @@ int send_ip (char* src, char *dst, char *data, unsigned int datalen,
         printf("\n");
     }
 	if (cfg.opt_dry_run) {
-		/* --dry-run: report the datagram instead of sending it.
-		 * One line per IP datagram (fragments included), hex. */
+		/* --dry-run: report the datagram instead of sending it, one
+		 * IP datagram (fragments included) at a time. Under --json a
+		 * "packet" event with the bytes as hex, otherwise a line. */
 		int i;
-		printf("dry-run: to %s, %d bytes: ",
-			inet_ntoa(ctx.remote.sin_addr), packetsize);
-		for (i = 0; i < packetsize; i++)
-			printf("%.2x", (unsigned char) packet[i]);
-		printf("\n");
+		char *hex = malloc((size_t) packetsize * 2 + 1);
+		if (hex != NULL) {
+			for (i = 0; i < packetsize; i++)
+				sprintf(hex + i*2, "%.2x", (unsigned char) packet[i]);
+			if (output_json_enabled()) {
+				out_begin("packet");
+				out_ipv4("to", ctx.remote.sin_addr.s_addr);
+				out_int("bytes", packetsize);
+				out_str("hex", hex);
+				out_end();
+			} else {
+				printf("dry-run: to %s, %d bytes: %s\n",
+					inet_ntoa(ctx.remote.sin_addr), packetsize, hex);
+			}
+			free(hex);
+		}
 		free(packet);
 		if (cfg.opt_safe && !ctx.eof_reached)
 			cfg.src_id++;

@@ -157,3 +157,41 @@ sürümde de `-Werror` ile derlenir ve tüm test paketi geçer. Sürüm keşfi
 karıştırılmadı (prompt §6); tek fark `const` idi. Destek iddiası gerçek
 derleme + çalışma testine dayanır (Tcl 9.0.1 kaynağından derlenip
 doğrulandı).
+
+## KK-9 — Yapılandırılmış çıktı: NDJSON, insan çıktısına dokunmadan (Aşama 4)
+
+**Bağlam.** Otomasyon için makine-okur çıktı gerekiyordu; ama mevcut insan
+çıktısı (yanıt satırları, tarama tablosu, istatistik) betiklerce ayrıştırılıyor
+ve karakterizasyon testleriyle (`cli.sh`) sabitlenmiş.
+
+**Karar.** `--json` ile stdout'a satır başına bir JSON nesnesi (NDJSON);
+tanılar ve banner stderr'e. İnsan çıktı yolu **değiştirilmedi**: her yanıt
+noktasında `if (output_json_enabled()) { JSON olay } else { mevcut printf }`.
+Böylece iki çıktı bağımsız olarak doğru ve insan biçimi bayt-bayt korunur.
+Bilinmeyen değer `null` (yanıltıcı 0 değil): eşleşmeyen yanıtın `rtt_ms`'i,
+örneklem yokken istatistik RTT'leri. Şema tamsayısı (`schema:1`) yalnızca
+uyumsuz değişiklikte artar; tüketici bilinmeyen anahtarı yok saymalı.
+Belge: `docs/JSON.txt`.
+
+**Gerekçe.** Ayrı JSON yolu, insan biçimini koruma (uyumluluk) ile
+yapılandırılmış çıktıyı aynı anda sağlamanın en güvenli yolu; alan listeleri
+mütevazı. Hex dump (-j/-J) JSON'a taşınmadı (kapsam); veri için `--dry-run`
+"packet" olayı veya `--read`.
+
+## KK-10 — `--read`: çevrimdışı pcap çözümleyici, gönderim yok (Aşama 4)
+
+**Bağlam.** `ctx.io` savefile yolu (Aşama 2) hazırdı; kullanıcıya çevrimdışı
+paket incelemesi sunmak isteniyordu.
+
+**Karar.** `--read file.pcap` alım-yalnızca moddur: raw socket açılmaz,
+hiç paket gönderilmez, dosya EOF'a kadar okunup her kare `wait_packet` ile
+çözümlenir; hedef/port filtresi normal alım yolundakiyle aynıdır. Probe
+gönderilmediği için `rtt_ms` `null` (delaytable boş) — bu dürüsttür,
+"ölçüm değil, çözümleme". Link-layer türü dosyanın DLT'sinden gelir.
+Kısa harf `-r` `--rel` tarafından alındığından `--read` yalnız uzun
+seçenektir.
+
+**Gerekçe.** Root'suz, ağsız bir çözümleme yeteneği; `--json` ile birleşince
+tam bir çevrimdışı boru hattı (`--read ... --json`). Gönderim tarafını
+kapatmak, "çevrimdışı okuma kendiliğinden yeniden gönderime dönüşmesin"
+(prompt §6) ilkesine uyar.

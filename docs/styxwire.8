@@ -181,11 +181,29 @@ for more information.
 Alias for -i u100000. Hping will send 10 packets for second.
 .TP
 .I --faster
-Alias for -i u1. Faster then --fast ;) (but not as fast as your computer can send packets due to the signal-driven design).
+Alias for -i u1, that is, as fast as the event loop timer allows.
 .TP
 .I --flood
 Sent packets as fast as possible, without taking care to show incoming replies.
 This is ways faster than to specify the -i u0 option.
+.TP
+.I --dry-run
+Build the packets and print them (one IP datagram per line, hex) instead
+of sending them. No raw socket is opened, so it needs no privileges;
+combine with --json for structured "packet" events.
+.TP
+.I --json
+Emit newline-delimited JSON (NDJSON) events on standard output, one object
+per line: reply, icmp-unreachable, icmp-timeexceeded, packet (--dry-run)
+and a final statistics event. Diagnostics and the banner go to standard
+error. See docs/JSON.txt for the schema. An unknown value (for example the
+RTT of a reply that matched no probe) is emitted as null.
+.TP
+.I --read file
+Read and dissect a pcap savefile instead of a live interface: no raw
+socket, nothing is sent (needs no privileges). Replies matching the target
+and port filter are reported (with --json, as reply events); their rtt_ms
+is null because no probe was sent.
 .TP
 .I -n --numeric
 Numeric output only, No attempt will be made to lookup symbolic names for host addresses.
@@ -279,7 +297,9 @@ the standard styxwire behaviors are encapsulated into a scanning
 algorithm.
 .br
 .BR "Tech note" :
-The scan mode uses a two-processes design, with shared memory for synchronization. The scanning algorithm is still not optimal, but already quite fast.
+The scan mode runs inside the single event loop: probes are sent as their
+deadline comes due and replies are handled as they arrive. The scanning
+algorithm is still not optimal, but already quite fast.
 .br
 .BR Hint :
 unlike most scanners, styxwire shows some interesting info about received

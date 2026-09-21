@@ -27,6 +27,7 @@
 #include "stub_send.h"
 #include "testutil.h"
 #include "fakeio.h"
+#include "output.h"
 
 #define LOCAL  FAKE_LOCAL
 #define REMOTE FAKE_REMOTE
@@ -441,6 +442,82 @@ static void test_real_signal_wakeup(void)
 	CHECK_EQ_INT(ctx.signals_installed, 0);
 }
 
+/* Capture the loop's stdout (the NDJSON events) into 'buf'. */
+static void run_json_captured(char *buf, size_t buflen)
+{
+	FILE *tmp = tmpfile();
+	int saved = dup(1), saved_err = dup(2), null = open("/dev/null", O_WRONLY);
+	size_t n;
+
+	output_set_stream(tmp);		/* out.c writes here */
+	fflush(stdout); fflush(stderr);
+	dup2(fileno(tmp), 1);		/* legacy printf goes here too */
+	dup2(null, 2);			/* banner/diagnostics discarded */
+	hping_run();
+	fflush(stdout); fflush(stderr);
+	dup2(saved, 1); dup2(saved_err, 2);
+	close(saved); close(saved_err); close(null);
+	output_set_stream(NULL);
+	rewind(tmp);
+	n = fread(buf, 1, buflen - 1, tmp);
+	buf[n] = '\0';
+	fclose(tmp);
+}
+
+static void test_json_mode(void)
+{
+	char buf[4096];
+
+	TEST("loop --json: reply and statistics events, stdout is only NDJSON");
+	session_reset(1000000, 2);
+	cfg.opt_json = 1;
+	script_reply(1000000 + 12000, SPORT, 0x12);	/* answers probe 0 */
+	run_json_captured(buf, sizeof(buf));
+	cfg.opt_json = 0;
+	/* every non-empty line is a JSON object (starts with {, ends with }) */
+	{
+		int lines = 0, reply = 0, stat = 0;
+		char *p = buf, *nl;
+		while ((nl = strchr(p, '\n')) != NULL) {
+			CHECK(p[0] == '{');
+			CHECK(nl[-1] == '}');
+			if (strstr(p, "\"type\":\"reply\"") && strstr(p, "\"proto\":\"tcp\"") &&
+			    (size_t)(strstr(p, "\"type\":\"reply\"") - buf) < (size_t)(nl - buf))
+				reply++;
+			if (strstr(p, "\"type\":\"statistics\"") &&
+			    (size_t)(strstr(p, "\"type\":\"statistics\"") - buf) < (size_t)(nl - buf))
+				stat++;
+			lines++;
+			p = nl + 1;
+		}
+		CHECK_EQ_INT(reply, 1);
+		CHECK_EQ_INT(stat, 1);
+		CHECK(lines >= 2);
+	}
+	/* the reply carries the matched RTT (12 ms) and the SYN+ACK flags */
+	CHECK(strstr(buf, "\"rtt_ms\":12.0") != NULL);
+	CHECK(strstr(buf, "\"flags\":\"SA\"") != NULL);
+	CHECK(strstr(buf, "\"dup\":false") != NULL);
+	CHECK(strstr(buf, "\"ip\":\"192.168.1.6\"") != NULL);
+	/* the statistics: one sent unanswered -> loss 50, rtt present */
+	CHECK(strstr(buf, "\"type\":\"statistics\"") != NULL);
+	CHECK(strstr(buf, "\"sent\":2") != NULL);
+	CHECK(strstr(buf, "\"received\":1") != NULL);
+	CHECK(strstr(buf, "\"loss_percent\":50") != NULL);
+	CHECK(strstr(buf, "\"rtt_min_ms\":12.0") != NULL);
+	hping_destroy();
+
+	TEST("loop --json: no reply -> rtt_ms null in statistics, exit 1");
+	session_reset(1000000, 1);
+	cfg.opt_json = 1;
+	run_json_captured(buf, sizeof(buf));
+	cfg.opt_json = 0;
+	CHECK(strstr(buf, "\"received\":0") != NULL);
+	CHECK(strstr(buf, "\"loss_percent\":100") != NULL);
+	CHECK(strstr(buf, "\"rtt_min_ms\":null") != NULL);
+	hping_destroy();
+}
+
 int main(void)
 {
 	test_schedule_and_rtt();
@@ -452,6 +529,7 @@ int main(void)
 	test_wall_clock_jump();
 	test_random_injection();
 	test_init_failure_cleanup();
+	test_json_mode();		/* fake clock: run before the real-signal test */
 	test_real_pcap_io();
 	test_real_signal_wakeup();
 	return tu_report("test_loop");

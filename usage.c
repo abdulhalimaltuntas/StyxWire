@@ -25,6 +25,8 @@ void	show_usage(void)
 "      --faster    alias for -i u1 (as fast as the timer allows)\n"
 "      --flood	   sent packets as fast as possible. Don't show replies.\n"
 "      --dry-run   build and print the packets, do not send (no root)\n"
+"      --json      NDJSON events on stdout, diagnostics on stderr\n"
+"      --read file read and dissect a pcap savefile (no root)\n"
 "  -n  --numeric   numeric output\n"
 "  -q  --quiet     quiet\n"
 "  -I  --interface interface name (otherwise default routing interface)\n"

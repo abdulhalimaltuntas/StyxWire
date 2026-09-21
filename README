@@ -24,8 +24,13 @@ WHAT IT IS USED FOR
 	- Teaching and learning TCP/IP
 
 	Sending and capturing packets needs root (raw sockets); building
-	and dissecting do not. --dry-run and the offline Tcl commands
+	and dissecting do not. --dry-run (build and print packets),
+	--read file.pcap (dissect a savefile) and the offline Tcl commands
 	(styxwire build/describe/validate) run as an ordinary user.
+
+	--json makes styxwire emit newline-delimited JSON events on stdout
+	(replies, ICMP errors, statistics) with diagnostics on stderr, for
+	pipelines and automation; see docs/JSON.txt.
 
 BUILDING AND TESTING
 

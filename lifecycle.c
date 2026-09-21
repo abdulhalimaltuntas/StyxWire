@@ -46,6 +46,7 @@
 
 #include "hping2.h"
 #include "globals.h"
+#include "output.h"
 
 /* ------------------------------------------------------------------ */
 /* signals: flags and a wake up byte, nothing else                     */
@@ -280,29 +281,30 @@ int hping_init(void)
 			cfg.ifname, ctx.ifstraddr, ctx.h_if_mtu);
 	}
 
-	/* --dry-run builds packets but sends nothing and reads nothing, so
-	 * it needs neither the raw socket nor the capture handle (and thus
-	 * no privileges). Everything else is set up as usual. */
+	/* --dry-run builds packets but sends nothing and reads nothing;
+	 * --read dissects a savefile and sends nothing. Neither needs the
+	 * raw socket (nor privileges). --dry-run also needs no capture
+	 * handle; --read opens the savefile as its capture handle. */
 	if (!cfg.opt_dry_run) {
-		/* open raw socket */
-		ctx.sockraw = open_sockraw();
-		if (ctx.sockraw == -1) {
-			fprintf(stderr, "[main] can't open raw socket\n");
-			return -1;
+		if (cfg.readfile == NULL) {
+			/* open raw socket (sending side) */
+			ctx.sockraw = open_sockraw();
+			if (ctx.sockraw == -1) {
+				fprintf(stderr, "[main] can't open raw socket\n");
+				return -1;
+			}
+			socket_broadcast(ctx.sockraw);	/* SO_BROADCAST */
+			socket_iphdrincl(ctx.sockraw);	/* IP_HDRINCL */
 		}
 
-		/* set SO_BROADCAST option */
-		socket_broadcast(ctx.sockraw);
-		/* set SO_IPHDRINCL option */
-		socket_iphdrincl(ctx.sockraw);
-
-		/* open sock packet or libpcap socket */
+		/* open the capture handle: live interface, or the savefile */
 		if (open_pcap() == -1) {
 			fprintf(stderr, "[main] open_pcap failed\n");
 			return -1;
 		}
 
-		/* get physical layer header size */
+		/* get physical layer header size (from the savefile's DLT
+		 * when reading) */
 		if ( get_linkhdr_size(cfg.ifname) == -1 ) {
 			fprintf(stderr, "[main] physical layer header size unknown\n");
 			return -1;
@@ -347,6 +349,8 @@ void hping_destroy(void)
 	}
 	free(cfg.apd_send);
 	cfg.apd_send = NULL;
+	free(cfg.readfile);
+	cfg.readfile = NULL;
 }
 
 /* ------------------------------------------------------------------ */
@@ -380,7 +384,10 @@ static void print_banner(void)
 		hdr_size = IPHDR_SIZE + TCPHDR_SIZE;
 	}
 
-	printf("STYXWIRE %s (%s %s): %s set, %d headers + %d data bytes\n",
+	/* Under --json the banner is a diagnostic: send it to stderr so
+	 * stdout carries only NDJSON. */
+	fprintf(output_json_enabled() ? stderr : stdout,
+		"STYXWIRE %s (%s %s): %s set, %d headers + %d data bytes\n",
 		cfg.targetname,
 		cfg.ifname,
 		ctx.targetstraddr,
@@ -447,6 +454,8 @@ static int flood_loop(void)
 /* The event loop of the normal (TCP/UDP/ICMP/raw IP) mode. */
 static int main_loop(void)
 {
+	int receive_only = (cfg.readfile != NULL); /* --read: dissect, do not send */
+
 	ctx.next_send_us = hping_monotonic_us();
 	ctx.end_deadline_us = -1;
 
@@ -463,7 +472,7 @@ static int main_loop(void)
 			hping_stop(HPING_STOP_SENT);
 			break;
 		}
-		if (!all_probes_sent() && now >= ctx.next_send_us) {
+		if (!receive_only && !all_probes_sent() && now >= ctx.next_send_us) {
 			if (send_due_probe(now) == -1) {
 				hping_stop(HPING_STOP_ERROR);
 				break;
@@ -471,9 +480,12 @@ static int main_loop(void)
 			now = hping_monotonic_us();
 		}
 
-		/* how long may we sleep: until the next probe is due, or
-		 * until the late replies deadline */
-		if (!all_probes_sent())
+		/* how long may we sleep: a savefile is always ready, so no
+		 * wait; otherwise until the next probe, or the late-reply
+		 * deadline */
+		if (receive_only)
+			timeout = 0;
+		else if (!all_probes_sent())
 			timeout = ctx.next_send_us - now;
 		else
 			timeout = ctx.end_deadline_us - now;
@@ -505,6 +517,7 @@ static int main_loop(void)
 
 int hping_run(void)
 {
+	output_init();
 	if (cfg.opt_listenmode) {
 		fprintf(stderr, "styxwire listen mode\n");
 		lock_memory();
@@ -518,6 +531,9 @@ int hping_run(void)
 		if (cfg.opt_dry_run)
 			fprintf(stderr, "styxwire dry-run: building packets, "
 					"nothing is sent\n");
+		if (cfg.readfile)
+			fprintf(stderr, "styxwire reading %s, nothing is sent\n",
+					cfg.readfile);
 		if (cfg.opt_datafromfile || cfg.opt_sign)
 			lock_memory();
 		if (cfg.opt_flood)
@@ -525,7 +541,9 @@ int hping_run(void)
 		else
 			main_loop();
 	}
-	hping_stats_print(stderr, cfg.targetname);
+	/* human statistics go to stderr; the JSON event goes to stdout
+	 * (hping_stats_print picks the stream from output_json_enabled) */
+	hping_stats_print(output_json_enabled() ? stdout : stderr, cfg.targetname);
 	if (ctx.stop_reason == HPING_STOP_ERROR)
 		return 1;
 	return hping_exit_code();

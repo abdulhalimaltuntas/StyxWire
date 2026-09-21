@@ -9,6 +9,22 @@ styxwire.8 man page linked as hping3.8); --version reports the StyxWire
 version and the hping3 base it descends from. The command line, exit
 codes, Tcl API and APD language are unchanged.
 
+------ phase 4: professional CLI and automation (2026-09) -------
+
+See docs/ASAMA4-RAPORU.md. In short:
+
+  - --json: newline-delimited JSON on stdout (reply, icmp-unreachable,
+    icmp-timeexceeded, packet, statistics events), diagnostics and the
+    banner on stderr. Unknown values are null, never a misleading zero.
+    The human output is unchanged when --json is off. Schema in
+    docs/JSON.txt (output.c).
+  - --read file.pcap: dissect a savefile offline (no raw socket, nothing
+    sent, no root); combine with --json for a pure offline pipeline.
+  - --dry-run under --json emits "packet" events with the built bytes.
+  - Tests: tests/test_output.c (the serializer), --json event-loop
+    scenarios in test_loop, --json and --read checks in cli.sh; 11
+    groups.
+
 ------ phase 3: Tcl 9, offline work and fuzzing (2026-09) -------
 
 See docs/ASAMA3-RAPORU.md. In short:

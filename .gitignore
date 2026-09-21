@@ -23,3 +23,4 @@ tests/libars_link
 tests/fuzz_split
 tests/fuzz_apd
 tests/fuzz_opts
+tests/test_output

@@ -38,7 +38,7 @@ enum {	OPT_COUNT, OPT_INTERVAL, OPT_NUMERIC, OPT_QUIET, OPT_INTERFACE,
 	OPT_ICMP_IPSRC, OPT_ICMP_IPDST, OPT_ICMP_SRCPORT, OPT_ICMP_DSTPORT,
 	OPT_ICMP_GW, OPT_FORCE_ICMP, OPT_APD_SEND, OPT_SCAN, OPT_FASTER,
 	OPT_BEEP, OPT_FLOOD, OPT_CLOCK_SKEW, OPT_CS_WINDOW, OPT_CS_WINDOW_SHIFT,
-        OPT_CS_VECTOR_LEN, OPT_DRY_RUN };
+        OPT_CS_VECTOR_LEN, OPT_DRY_RUN, OPT_JSON, OPT_READ };
 
 static struct ago_optlist hping_optlist[] = {
 	{ 'c',	"count",	OPT_COUNT,		AGO_NEEDARG },
@@ -128,6 +128,8 @@ static struct ago_optlist hping_optlist[] = {
 	{ '\0', "beep",		OPT_BEEP,		AGO_NOARG },
 	{ '\0', "flood",	OPT_FLOOD,		AGO_NOARG },
 	{ '\0', "dry-run",	OPT_DRY_RUN,		AGO_NOARG },
+	{ '\0', "json",	OPT_JSON,		AGO_NOARG },
+	{ '\0',	"read",		OPT_READ,		AGO_NEEDARG },
 	{ '\0', "clock-skew",	OPT_CLOCK_SKEW,		AGO_NOARG },
 	{ '\0', "clock-skew-win", OPT_CS_WINDOW,	AGO_NEEDARG},
 	{ '\0', "clock-skew-win-shift", OPT_CS_WINDOW_SHIFT,	AGO_NEEDARG},
@@ -674,6 +676,17 @@ int parse_options(int argc, char **argv)
 			break;
 		case OPT_DRY_RUN:
 			cfg.opt_dry_run = TRUE;
+			break;
+		case OPT_JSON:
+			cfg.opt_json = TRUE;
+			break;
+		case OPT_READ:
+			free(cfg.readfile);
+			cfg.readfile = strdup(ago_optarg);
+			if (cfg.readfile == NULL) {
+				fprintf(stderr, "styxwire: out of memory\n");
+				return HPING_PARSE_ERROR;
+			}
 			break;
                 case OPT_CLOCK_SKEW:
 			cfg.opt_tcp_timestamp = TRUE;

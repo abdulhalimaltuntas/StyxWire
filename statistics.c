@@ -15,6 +15,7 @@
 
 #include "hping2.h"
 #include "globals.h"
+#include "output.h"
 
 void hping_stats_on_sent(void)
 {
@@ -73,6 +74,31 @@ int hping_stats_loss_percent(const struct hping_stats *s)
 
 void hping_stats_print(FILE *fp, const char *target)
 {
+	/* Under --json the statistics are a data event on stdout, not the
+	 * human block on stderr. */
+	if (output_json_enabled()) {
+		out_begin("statistics");
+		out_str("target", target);
+		out_uint("sent", stats.sent);
+		out_uint("received", stats.received);
+		out_uint("duplicates", stats.duplicates);
+		out_uint("unmatched", stats.unmatched);
+		out_uint("unique", hping_stats_unique(&stats));
+		out_int("loss_percent", hping_stats_loss_percent(&stats));
+		if (stats.out_of_sequence)
+			out_uint("out_of_sequence", stats.out_of_sequence);
+		if (stats.rtt_samples) {
+			out_double("rtt_min_ms", stats.rtt_min);
+			out_double("rtt_avg_ms", stats.rtt_avg);
+			out_double("rtt_max_ms", stats.rtt_max);
+		} else {
+			out_null("rtt_min_ms");
+			out_null("rtt_avg_ms");
+			out_null("rtt_max_ms");
+		}
+		out_end();
+		return;
+	}
 	fprintf(fp, "\n--- %s styxwire statistic ---\n", target);
 	fprintf(fp, "%llu packets transmitted, %llu packets received, "
 		    "%d%% packet loss\n", stats.sent, stats.received,
