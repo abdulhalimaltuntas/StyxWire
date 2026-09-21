@@ -1,6 +1,41 @@
 CHANGES LOG
 $Id: CHANGES,v 1.2 2004/03/29 23:12:04 antirez Exp $
 
+------ StyxWire ------
+
+StyxWire is the continuation of hping3. The program is now installed as
+"styxwire" (with hping3/hping2/hping compatibility symlinks and a
+styxwire.8 man page linked as hping3.8); --version reports the StyxWire
+version and the hping3 base it descends from. The command line, exit
+codes, Tcl API and APD language are unchanged.
+
+------ phase 3: Tcl 9, offline work and fuzzing (2026-09) -------
+
+See docs/ASAMA3-RAPORU.md. In short:
+
+  - Tcl 9 support: builds and passes the test-suite against Tcl 8.6 and
+    Tcl 9.0 (Tcl_Obj *const, Tcl_Size); configure finds either.
+  - Offline Tcl commands that need no socket: "styxwire build" (APD ->
+    binary byte array), "styxwire describe" (binary -> APD), "styxwire
+    validate" (does an APD description compile). "styxwire" is registered
+    as a command name alongside "hping".
+  - --dry-run: build and print the packets, send nothing, open no raw
+    socket (runs unprivileged). Works in the TCP/UDP/ICMP/raw and flood
+    paths.
+  - The scripting startup file is under the caller's control:
+    STYXWIRE_NORC sources nothing, STYXWIRE_RC=path selects a file,
+    ~/.styxwirerc is preferred over ~/.hpingrc, and a startup-file error
+    is reported on stderr instead of being hidden.
+  - libFuzzer targets (make fuzz, clang): fuzz_split (binary ->
+    layers -> APD), fuzz_apd (APD -> packet), fuzz_opts (argv ->
+    parse_options); CI runs a 60 s session of each.
+  - docs/APD.txt rewritten to match the implementation (parentheses and
+    ip.*/tcp.* names, all examples validated).
+  - Tests: tests/test_script.c grew build/describe/validate and the
+    styxwire command-name checks; tests/rcfile.sh (startup-file control);
+    tests/cli.sh grew the --dry-run checks. 10 groups in the suite.
+
+------ phase 2: architecture and run time lifecycle (2026-09) -------
 ------ phase 2: architecture and run time lifecycle (2026-09) -------
 
 See docs/ASAMA2-RAPORU.md and docs/KARAR-KAYITLARI.md. In short:

@@ -1,15 +1,16 @@
-# Makefile.in for hping3.
+# Makefile.in for StyxWire (the continuation of hping3).
 #
 # ./configure prepends the configuration variables (CC, CFLAGS, PCAP_LIBS,
 # USE_TCL, prefix, sbindir, mandir, ...) to this file and writes Makefile.
 # Everything below only refers to those variables.
 #
 # Useful invocations:
-#   make                      build hping3
+#   make                      build styxwire
 #   make check                build and run the offline test-suite (no root)
 #   make check SANITIZE=1     same, with ASan/UBSan (run "make clean" first)
 #   make WERROR=1             treat warnings as errors
 #   make install DESTDIR=/tmp/stage   staged installation
+#   make fuzz                 build the libFuzzer targets (clang only)
 #
 # Copyright (C) 1999 by Salvatore Sanfilippo, GPL version 2.
 
@@ -49,15 +50,17 @@ OBJ=	main.o globals.o getifname.o getlhs.o \
 	adbuf.o hex.o apdutils.o sbignum.o \
 	sbignum-tables.o $(ARSOBJ)
 
-all: hping3
+PROG = styxwire
 
-hping3: byteorder.h systype.h $(OBJ)
-	$(CC) $(ALL_CFLAGS) $(ALL_LDFLAGS) -o hping3 $(OBJ) $(ALL_LDLIBS)
+all: $(PROG)
+
+$(PROG): byteorder.h systype.h $(OBJ)
+	$(CC) $(ALL_CFLAGS) $(ALL_LDFLAGS) -o $(PROG) $(OBJ) $(ALL_LDLIBS)
 	@echo
-	@echo "hping3 built. Try \`make check', \`make strip', \`make install'"
+	@echo "$(PROG) built. Try \`make check', \`make strip', \`make install'"
 
-hping3-static: byteorder.h systype.h $(OBJ)
-	$(CC) -static $(ALL_CFLAGS) $(ALL_LDFLAGS) -o hping3-static $(OBJ) $(ALL_LDLIBS) -ldl
+$(PROG)-static: byteorder.h systype.h $(OBJ)
+	$(CC) -static $(ALL_CFLAGS) $(ALL_LDFLAGS) -o $(PROG)-static $(OBJ) $(ALL_LDLIBS) -ldl
 
 libars.a: $(ARSOBJ) adbuf.o hex.o hstring.o strlcpy.o
 	$(AR) rc $@ $(ARSOBJ) adbuf.o hex.o hstring.o strlcpy.o
@@ -116,45 +119,80 @@ tests/test_script: tests/test_script.c tests/testutil.h script.c $(TEST_LINK) wa
 tests/libars_link: tests/libars_link.c libars.a
 	$(CC) $(ALL_CPPFLAGS) $(ALL_CFLAGS) $(ALL_LDFLAGS) -I. -o $@ tests/libars_link.c libars.a
 
-check: hping3 $(TEST_BINS) $(TEST_BINS_TCL)
+check: $(PROG) $(TEST_BINS) $(TEST_BINS_TCL)
 	@sh tests/run.sh $(TEST_BINS) $(TEST_BINS_TCL)
+
+# ---------------------------------------------------------------------------
+# fuzzing (libFuzzer, clang only). The ARS engine and the option parser are
+# linked into standalone fuzz drivers; the same objects as the build, minus
+# main.o and the send path (a fuzz run must not touch the network).
+#   make fuzz CC=clang
+#   tests/fuzz_split -max_len=2048 -runs=1000000 corpus/
+# CI runs a short, time-boxed session; a fixed run finding nothing is not a
+# proof of absence.
+# ---------------------------------------------------------------------------
+FUZZ_FLAGS = -fsanitize=fuzzer,address,undefined -g -O1
+# the ARS engine and its helpers are self-contained (this is libars.a plus
+# sbignum and apdutils)
+FUZZ_ARS_OBJ = $(ARSOBJ) adbuf.o hex.o hstring.o strlcpy.o apdutils.o 	sbignum.o sbignum-tables.o
+# the whole app minus main.o, with the send path replaced by the stub so a
+# run cannot touch the network
+FUZZ_APP_OBJ = $(filter-out main.o sendip_handler.o,$(OBJ)) tests/stub_send.o
+FUZZ_BINS = tests/fuzz_split tests/fuzz_apd tests/fuzz_opts
+
+fuzz: $(FUZZ_BINS)
+
+tests/fuzz_split: tests/fuzz/fuzz_split.c $(FUZZ_ARS_OBJ)
+	$(CC) $(ALL_CPPFLAGS) $(FUZZ_FLAGS) -I. -o $@ tests/fuzz/fuzz_split.c $(FUZZ_ARS_OBJ) $(ALL_LDLIBS)
+
+tests/fuzz_apd: tests/fuzz/fuzz_apd.c $(FUZZ_ARS_OBJ)
+	$(CC) $(ALL_CPPFLAGS) $(FUZZ_FLAGS) -I. -o $@ tests/fuzz/fuzz_apd.c $(FUZZ_ARS_OBJ) $(ALL_LDLIBS)
+
+tests/fuzz_opts: tests/fuzz/fuzz_opts.c $(FUZZ_APP_OBJ)
+	$(CC) $(ALL_CPPFLAGS) $(FUZZ_FLAGS) -I. -o $@ tests/fuzz/fuzz_opts.c $(FUZZ_APP_OBJ) $(ALL_LDLIBS)
 
 # ---------------------------------------------------------------------------
 # cleaning
 # ---------------------------------------------------------------------------
 clean:
-	rm -rf hping3 hping3-static *.o libars.a tests/*.o $(TEST_BINS) tests/test_script tests/test_loop tests/test_parse tests/libars_link
+	rm -rf $(PROG) $(PROG)-static hping3 *.o libars.a tests/*.o $(TEST_BINS) tests/test_script tests/test_loop tests/test_parse tests/libars_link tests/fuzz_split tests/fuzz_apd
 
 distclean: clean
 	rm -rf byteorder byteorder.h systype.h Makefile .depend .configure-tmp
 
 # ---------------------------------------------------------------------------
 # installation (honours DESTDIR, prefix, sbindir, mandir, datadir)
+#
+# styxwire is the binary; hping3, hping2 and hping are compatibility
+# symlinks so that existing scripts keep working. The Tcl library goes to
+# datadir/styxwire/lib, which the binary knows as STYXWIRE_LIBDIR.
 # ---------------------------------------------------------------------------
-install: hping3
+install: $(PROG)
 	$(INSTALL) -d "$(DESTDIR)$(sbindir)"
-	$(INSTALL) -m 755 hping3 "$(DESTDIR)$(sbindir)/hping3"
-	ln -sf hping3 "$(DESTDIR)$(sbindir)/hping"
-	ln -sf hping3 "$(DESTDIR)$(sbindir)/hping2"
+	$(INSTALL) -m 755 $(PROG) "$(DESTDIR)$(sbindir)/$(PROG)"
+	ln -sf $(PROG) "$(DESTDIR)$(sbindir)/hping3"
+	ln -sf $(PROG) "$(DESTDIR)$(sbindir)/hping2"
+	ln -sf $(PROG) "$(DESTDIR)$(sbindir)/hping"
 	$(INSTALL) -d "$(DESTDIR)$(mandir)/man8"
-	$(INSTALL) -m 644 docs/hping3.8 "$(DESTDIR)$(mandir)/man8/hping3.8"
+	$(INSTALL) -m 644 docs/styxwire.8 "$(DESTDIR)$(mandir)/man8/styxwire.8"
+	ln -sf styxwire.8 "$(DESTDIR)$(mandir)/man8/hping3.8"
 	@if [ -n "$(USE_TCL)" ]; then \
-		$(INSTALL) -d "$(DESTDIR)$(datadir)/hping3/lib"; \
-		for f in lib/*.htcl; do \
-			$(INSTALL) -m 644 "$$f" "$(DESTDIR)$(datadir)/hping3/lib/"; \
+		$(INSTALL) -d "$(DESTDIR)$(datadir)/styxwire/lib"; \
+		for f in lib/*.htcl lib/*.tcl; do \
+			$(INSTALL) -m 644 "$$f" "$(DESTDIR)$(datadir)/styxwire/lib/"; \
 		done; \
 	fi
 
 uninstall:
-	rm -f "$(DESTDIR)$(sbindir)/hping3" "$(DESTDIR)$(sbindir)/hping" "$(DESTDIR)$(sbindir)/hping2"
-	rm -f "$(DESTDIR)$(mandir)/man8/hping3.8"
-	rm -rf "$(DESTDIR)$(datadir)/hping3"
+	rm -f "$(DESTDIR)$(sbindir)/$(PROG)" "$(DESTDIR)$(sbindir)/hping3" "$(DESTDIR)$(sbindir)/hping2" "$(DESTDIR)$(sbindir)/hping"
+	rm -f "$(DESTDIR)$(mandir)/man8/styxwire.8" "$(DESTDIR)$(mandir)/man8/hping3.8"
+	rm -rf "$(DESTDIR)$(datadir)/styxwire"
 
-strip: hping3
-	@ls -l ./hping3
-	strip hping3
-	@ls -l ./hping3
+strip: $(PROG)
+	@ls -l ./$(PROG)
+	strip $(PROG)
+	@ls -l ./$(PROG)
 
-.PHONY: all dep check clean distclean install uninstall strip
+.PHONY: all dep check fuzz clean distclean install uninstall strip
 
 -include .depend

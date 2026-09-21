@@ -1,17 +1,25 @@
 .depend
 *.o
 hping3
+styxwire
+styxwire-static
 *.swp
 Makefile
 byteorder
 byteorder.h
 systype.h
 .configure-tmp
+hping3-static
+libars.a
+# built test and fuzz binaries (sources are *.c/*.h/*.sh)
 tests/*.o
 tests/test_core
 tests/test_waitpacket
 tests/test_scan
+tests/test_loop
+tests/test_parse
 tests/test_script
-hping3-static
-libars.a
 tests/libars_link
+tests/fuzz_split
+tests/fuzz_apd
+tests/fuzz_opts

@@ -1,4 +1,4 @@
-# Continuous integration for hping3.
+# Continuous integration for StyxWire.
 #
 # Every job builds from a clean checkout with warnings as errors and runs
 # the offline test-suite (no root, no network traffic). The matrix covers
@@ -32,7 +32,7 @@ jobs:
       - name: build (warnings are errors)
         run: make -j"$(nproc)" WERROR=1
       - name: help and version need no privileges
-        run: ./hping3 --help >/dev/null && ./hping3 --version
+        run: ./styxwire --help >/dev/null && ./styxwire --version
       - name: test-suite
         run: make check WERROR=1
       - name: staged install
@@ -50,3 +50,25 @@ jobs:
         run: CC=clang ./configure --with-tcl
       - name: test-suite under ASan/UBSan
         run: make -j"$(nproc)" check SANITIZE=1 WERROR=1
+
+  # A short, time-boxed fuzz run on each of the three targets: this catches
+  # regressions, it is not a proof of absence (see docs/ASAMA3-RAPORU.md).
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpcap-dev pkg-config clang
+      - name: configure without Tcl
+        run: CC=clang ./configure --no-tcl
+      - name: build the fuzz targets
+        run: make -j"$(nproc)" fuzz CC=clang
+      - name: run each target for 60s
+        run: |
+          set -e
+          mkdir -p corpus
+          for t in split apd opts; do
+            ASAN_OPTIONS=detect_leaks=0 ./tests/fuzz_$t -max_total_time=60 -max_len=2048 corpus
+          done

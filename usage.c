@@ -16,7 +16,7 @@
 void	show_usage(void)
 {
 	printf(
-"usage: hping host [options]\n"
+"usage: styxwire host [options]\n"
 "  -h  --help      show this help\n"
 "  -v  --version   show version\n"
 "  -c  --count     packet count\n"
@@ -24,6 +24,7 @@ void	show_usage(void)
 "      --fast      alias for -i u100000 (10 packets for second)\n"
 "      --faster    alias for -i u1 (as fast as the timer allows)\n"
 "      --flood	   sent packets as fast as possible. Don't show replies.\n"
+"      --dry-run   build and print the packets, do not send (no root)\n"
 "  -n  --numeric   numeric output\n"
 "  -q  --quiet     quiet\n"
 "  -I  --interface interface name (otherwise default routing interface)\n"
@@ -38,7 +39,7 @@ void	show_usage(void)
 "  -1  --icmp       ICMP mode\n"
 "  -2  --udp        UDP mode\n"
 "  -8  --scan       SCAN mode.\n"
-"                   Example: hping --scan 1-30,70-90 -S www.target.host\n"
+"                   Example: styxwire --scan 1-30,70-90 -S www.target.host\n"
 "  -9  --listen     listen mode\n"
 "IP\n"
 "  -a  --spoof      spoof source address\n"

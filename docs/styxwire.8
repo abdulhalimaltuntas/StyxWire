@@ -1,8 +1,8 @@
-.TH HPING2 8 "2001 Aug 14"
+.TH STYXWIRE 8 "2026 Sep 21"
 .SH NAME
-hping2 \- send (almost) arbitrary TCP/IP packets to network hosts
+styxwire \- send (almost) arbitrary TCP/IP packets to network hosts (formerly hping3)
 .SH SYNOPSIS
-.B hping2
+.B styxwire
 [
 .B \-hvnqVDzZ012WrfxykQbFSRPAUXYjJBuTG
 ] [
@@ -116,11 +116,11 @@ hostname
 .br
 .ad
 .SH DESCRIPTION
-hping2 is a network tool able to send custom TCP/IP packets and to
-display target replies like ping program does with ICMP replies. hping2
+styxwire is a network tool able to send custom TCP/IP packets and to
+display target replies like ping program does with ICMP replies. styxwire
 handle fragmentation, arbitrary packets body and size and can be used in
 order to transfer files encapsulated under supported protocols. Using
-hping2 you are able to perform at least the following stuff:
+styxwire you are able to perform at least the following stuff:
 
  - Test firewall rules
  - Advanced port scanning
@@ -136,14 +136,14 @@ hping2 you are able to perform at least the following stuff:
  - A lot of others.
 
 .IR "It's also a good didactic tool to learn TCP/IP" .
-hping2 is developed and maintained by antirez@invece.org and is
-licensed under GPL version 2. Development is open so you can send
-me patches, suggestion and affronts without inhibitions.
-.SH HPING SITE
-primary site at
-.BR http://www.hping.org .
-You can found both the stable release and the instruction
-to download the latest source code at http://www.hping.org/download.html
+StyxWire is the continuation of hping3, written and maintained by
+Salvatore Sanfilippo (antirez@invece.org) and licensed under GPL
+version 2. The command line, the Tcl API and the APD packet
+description language are kept compatible; hping3, hping2 and hping are
+installed as symbolic links to styxwire.
+.SH STYXWIRE SITE
+.BR https://github.com/abdulhalimaltuntas/StyxWire .
+The historical hping site was http://www.hping.org.
 .SH BASE OPTIONS
 .TP
 .I -h --help
@@ -158,7 +158,7 @@ or
 .I -c --count count
 Stop after sending (and receiving)
 .I count
-response packets. After last packet was send hping2 wait COUNTREACHED_TIMEOUT
+response packets. After last packet was send styxwire wait COUNTREACHED_TIMEOUT
 seconds target host replies. You are able to tune COUNTREACHED_TIMEOUT editing
 hping2.h
 .TP
@@ -171,9 +171,9 @@ to X seconds, --interval uX set
 .I wait
 to X micro seconds.
 The default is to wait
-one second between each packet. Using hping2 to transfer files tune this
+one second between each packet. Using styxwire to transfer files tune this
 option is really important in order to increase transfer rate. Even using
-hping2 to perform idle/spoofing scanning you should tune this option, see
+styxwire to perform idle/spoofing scanning you should tune this option, see
 .B HPING2-HOWTO
 for more information.
 .TP
@@ -195,13 +195,13 @@ Quiet output. Nothing is displayed except the summary lines at
 startup time and when finished.
 .TP
 .I -I --interface interface name
-By default on linux and BSD systems hping2 uses default routing interface.
+By default on linux and BSD systems styxwire uses default routing interface.
 In other systems or when there is no default route
-hping2 uses the first non-loopback interface.
-However you are able to force hping2 to use the interface you need using
+styxwire uses the first non-loopback interface.
+However you are able to force styxwire to use the interface you need using
 this option. Note: you don't need to specify the whole name, for
 example -I et will match eth0 ethernet0 myet1 et cetera. If no interfaces
-match hping2 will try to use lo.
+match styxwire will try to use lo.
 .TP
 .I -V --verbose
 Enable verbose output. TCP replies will be shown as follows:
@@ -211,7 +211,7 @@ tos=0 iplen=40 seq=0 ack=1380893504 sum=2010 urp=0
 .TP
 .I -D --debug
 Enable debug mode, it's useful when you experience some problem with
-hping2. When debug mode is enabled you will get more information about
+styxwire. When debug mode is enabled you will get more information about
 .B interface detection, data link layer access, interface settings, options
 .B parsing, fragmentation, HCMP protocol
 and other stuff.
@@ -223,30 +223,30 @@ so you will able to increment/decrement ttl of outgoing packets pressing
 CTRL+Z once or twice.
 .TP
 .I -Z --unbind
-Unbind CTRL+Z so you will able to stop hping2.
+Unbind CTRL+Z so you will able to stop styxwire.
 .TP
 .I --beep
 Beep for every matching received packet (but not for ICMP errors).
 .SH PROTOCOL SELECTION
-Default protocol is TCP, by default hping2 will send tcp headers to target
+Default protocol is TCP, by default styxwire will send tcp headers to target
 host's port 0 with a winsize of 512 without any tcp flag on. Often this
 is the best way to do an 'hide ping', useful when target is behind
 a firewall that drop ICMP. Moreover a tcp null-flag to port 0 has a good
 probability of not being logged.
 .TP
 .I -0 --rawip
-RAW IP mode, in this mode hping2 will send IP header with data
+RAW IP mode, in this mode styxwire will send IP header with data
 appended with --signature and/or --file, see also --ipproto that
 allows you to set the ip protocol field.
 .TP
 .I -1 --icmp
-ICMP mode, by default hping2 will send ICMP echo-request, you can set
+ICMP mode, by default styxwire will send ICMP echo-request, you can set
 other ICMP type/code using
 .B --icmptype --icmpcode
 options.
 .TP
 .I -2 --udp
-UDP mode, by default hping2 will send udp to target host's port 0.
+UDP mode, by default styxwire will send udp to target host's port 0.
 UDP header tunable options are the following:
 .B --baseport, --destport, --keep.
 .TP
@@ -254,7 +254,7 @@ UDP header tunable options are the following:
 Scan mode, the option expects an argument that describes groups of
 ports to scan. port groups are comma separated: a number describes
 just a single port, so 1,2,3 means port 1, 2 and 3. ranges are specified
-using a start-end notation, like 1-1000, that tell hping to scan ports between 1 and 1000 (included). the special word
+using a start-end notation, like 1-1000, that tell styxwire to scan ports between 1 and 1000 (included). the special word
 .B all
 is an alias for 0-65535, while the special word
 .B known
@@ -262,37 +262,37 @@ includes all the ports listed in /etc/services.
 .br
 Groups can be combined, so the following command line will
 scan ports between 1 and 1000 AND port 8888 AND ports listed in /etc/services:
-.B hping --scan 1-1000,8888,known -S target.host.com
+.B styxwire --scan 1-1000,8888,known -S target.host.com
 .br
 Groups can be negated (subtracted) using a ! character as prefix,
 so the following command line will scan all the ports NOT listed
 in /etc/services in the range 1-1024:
-.B hping --scan '1-1024,!known' -S target.host.com
+.B styxwire --scan '1-1024,!known' -S target.host.com
 .br
-Keep in mind that while hping seems much more like a port scanner in
-this mode, most of the hping switches are still honored, so for example to
+Keep in mind that while styxwire seems much more like a port scanner in
+this mode, most of the styxwire switches are still honored, so for example to
 perform a SYN scan you need to specify the
 .B -S
 option, you can change the TCP windows size, TTL, control the
 IP fragmentation as usually, and so on. The only real difference is that
-the standard hping behaviors are encapsulated into a scanning
+the standard styxwire behaviors are encapsulated into a scanning
 algorithm.
 .br
 .BR "Tech note" :
 The scan mode uses a two-processes design, with shared memory for synchronization. The scanning algorithm is still not optimal, but already quite fast.
 .br
 .BR Hint :
-unlike most scanners, hping shows some interesting info about received
+unlike most scanners, styxwire shows some interesting info about received
 packets, the IP ID, TCP win, TTL, and so on, don't forget to look
 at this additional information when you perform a scan! Sometimes they
 shows interesting details.
 .TP
 .I -9 --listen signature
-HPING2 listen mode, using this option hping2 waits for packet that contain
+STYXWIRE listen mode, using this option styxwire waits for packet that contain
 .I signature
 and dump from
 .I signature
-end to packet's end. For example if hping2 --listen TEST reads a packet
+end to packet's end. For example if styxwire --listen TEST reads a packet
 that contain
 .B 234-09sdflkjs45-TESThello_world
 it will display
@@ -309,7 +309,7 @@ to see how it's possible to perform spoofed/idle scanning see the
 .I --rand-source
 This option enables the
 .BR "random source mode" .
-hping will send packets with random source address. It is interesting
+styxwire will send packets with random source address. It is interesting
 to use this option to stress firewall state tables, and other
 per-ip basis dynamic tables inside the TCP/IP stacks and firewall
 software.
@@ -317,7 +317,7 @@ software.
 .I --rand-dest
 This option enables the
 .BR "random destination mode" .
-hping will send the packets to random addresses obtained following
+styxwire will send the packets to random addresses obtained following
 the rule you specify as the target host. You need to specify
 a numerical IP address as target host like
 .BR 10.0.0.x .
@@ -325,7 +325,7 @@ All the occurrences of
 .B x
 will be replaced with a random number in the range 0-255. So to obtain
 Internet IP addresses in the whole IPv4 space use something like
-.BR "hping x.x.x.x --rand-dest" .
+.BR "styxwire x.x.x.x --rand-dest" .
 If you are not sure about what kind of addresses your rule is generating
 try to use the
 .B --debug
@@ -334,7 +334,7 @@ When this option is turned on, matching packets will be accept from all
 the destinations.
 .br
 .BR Warning :
-when this option is enabled hping can't detect the right outgoing
+when this option is enabled styxwire can't detect the right outgoing
 interface for the packets, so you should use the
 .B --interface
 option to select the desired outgoing interface.
@@ -347,7 +347,7 @@ of outgoing packets, it's likely that you will use this with
 or
 .B --bind
 options. If in doubt try
-.BR "" "`" "hping2 some.host.com -t 1 --traceroute" "'."
+.BR "" "`" "styxwire some.host.com -t 1 --traceroute" "'."
 .TP
 .I -N --id
 Set ip->id field. Default id is random but if fragmentation is turned on
@@ -361,7 +361,7 @@ Set the ip protocol in RAW IP mode.
 .I -W --winid
 id from Windows* systems before Win2k has different byte ordering, if this
 option is enable
-hping2 will properly display id replies from those Windows.
+styxwire will properly display id replies from those Windows.
 .TP
 .I -r --rel
 Display id increments instead of id. See the
@@ -404,7 +404,7 @@ for more information try
 Record route. Includes the RECORD_ROUTE option in each packet sent and
 displays the route buffer of returned packets. Note that the IP header
 is only large enough for nine such routes. Many hosts ignore or discard
-this option. Also note that using hping you are able to use record route
+this option. Also note that using styxwire you are able to use record route
 even if target host filter ICMP. Record route is an IP option, not
 an ICMP option, so you can use record route option even in TCP and UDP
 mode.
@@ -445,7 +445,7 @@ Alias for --icmptype 17 (to send ICMP address mask requests).
 .SH TCP/UDP RELATED OPTIONS
 .TP
 .I -s --baseport source port
-hping2 uses source port in order to guess replies sequence number. It
+styxwire uses source port in order to guess replies sequence number. It
 starts with a base source port number, and increase this number for each
 packet sent. When packet is received sequence number can be computed as
 .IR "replies.dest.port - base.source.port" .
@@ -485,7 +485,7 @@ This option can be used in order to collect sequence numbers generated
 by target host. This can be useful when you need to analyze whether
 TCP sequence number is predictable. Output example:
 
-.B #hping2 win98 --seqnum -p 139 -S -i u1 -I eth0
+.B #styxwire win98 --seqnum -p 139 -S -i u1 -I eth0
 .nf
 HPING uaz (eth0 192.168.4.41): S set, 40 headers + 0 data bytes
 2361294848 +2361294848
@@ -540,8 +540,8 @@ Set Ymas tcp flag.
 .SH COMMON OPTIONS
 .TP
 .I -d --data data size
-Set packet body size. Warning, using --data 40 hping2 will not generate
-0 byte packets but protocol_header+40 bytes. hping2 will display
+Set packet body size. Warning, using --data 40 styxwire will not generate
+0 byte packets but protocol_header+40 bytes. styxwire will display
 packet size information as first line output, like this:
 .B HPING www.yahoo.com (ppp0 204.71.200.67): NO FLAGS are set, 40 headers + 40 data bytes
 .TP
@@ -558,7 +558,7 @@ bytes of data with
 If the
 .I signature length
 is bigger than data size an error message will be displayed.
-If you don't specify the data size hping will use the signature
+If you don't specify the data size styxwire will use the signature
 size as data size.
 This option can be used safely with
 .I --file filename
@@ -577,9 +577,9 @@ will be resent. For example in order to send file /etc/passwd from host
 A to host B you may use the following:
 .nf
 .I [host_a]
-.B # hping2 host_b --udp -p 53 -d 100 --sign signature --safe --file /etc/passwd
+.B # styxwire host_b --udp -p 53 -d 100 --sign signature --safe --file /etc/passwd
 .I [host_b]
-.B # hping2 host_a --listen signature --safe --icmp
+.B # styxwire host_a --listen signature --safe --icmp
 .fi
 .TP
 .I -u --end
@@ -590,10 +590,10 @@ accept more packets. Please, for more information see the
 .BR HPING2-HOWTO .
 .TP
 .I -T --traceroute
-Traceroute mode. Using this option hping2 will increase ttl for each
+Traceroute mode. Using this option styxwire will increase ttl for each
 .B ICMP time to live 0 during transit
 received. Try
-.BR "hping2 host --traceroute" .
+.BR "styxwire host --traceroute" .
 This option implies --bind and --ttl 1. You can override the ttl of 1
 using the --ttl option. Since 2.0.0 stable it prints RTT information.
 .TP
@@ -601,10 +601,10 @@ using the --ttl option. Since 2.0.0 stable it prints RTT information.
 Keep the TTL fixed in traceroute mode, so you can monitor just one hop
 in the route. For example, to monitor how the 5th hop changes or
 how its RTT changes you can try
-.BR "hping2 host --traceroute --ttl 5 --tr-keep-ttl" .
+.BR "styxwire host --traceroute --ttl 5 --tr-keep-ttl" .
 .TP
 .I --tr-stop
-If this option is specified hping will exit once the first packet
+If this option is specified styxwire will exit once the first packet
 that isn't an ICMP time exceeded is received. This better emulates
 the traceroute behavior.
 .TP
@@ -651,7 +651,7 @@ is the TCP window size.
 .B rtt
 is the round trip time in milliseconds.
 
-If you run hping using the
+If you run styxwire using the
 .B -V
 command line switch it will display additional information about the
 packet, example:
@@ -707,7 +707,7 @@ The only difference is the description of the error, it starts with
 TTL 0.
 
 .SH AUTHOR
-Salvatore Sanfilippo <antirez@invece.org>, with the help of the people mentioned in AUTHORS file and at http://www.hping.org/authors.html
+Salvatore Sanfilippo <antirez@invece.org>, with the help of the people mentioned in AUTHORS file and at http://www.styxwire.org/authors.html
 .SH BUGS
 Even using the --end and --safe options to transfer files the final packet
 will be padded with 0x00 bytes.
@@ -719,7 +719,7 @@ headers are naturally aligned, may create problems with different
 processors and bogus packets if there is some unaligned access around
 the code (hopefully none).
 .PP
-On solaris hping does not work on the loopback interface. This seems
+On solaris styxwire does not work on the loopback interface. This seems
 a solaris problem, as stated in the tcpdump-workers mailing list,
 so the libpcap can't do nothing to handle it properly.
 .SH SEE ALSO

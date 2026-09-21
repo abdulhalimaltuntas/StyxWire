@@ -9,7 +9,8 @@
  */ 
 
 /*
- * hping official page at http://www.kyuzz.org/antirez
+ * StyxWire: https://github.com/abdulhalimaltuntas/StyxWire
+ * (continuation of hping3, originally at http://www.hping.org)
  * Covered by GPL version 2, Read the COPYING file for more information
  */
 
@@ -45,7 +46,7 @@ int main(int argc, char **argv)
 		hping_script(argc, argv);
 		return 0; /* unreached */
 #else
-		fprintf(stderr, "Sorry, this hping binary was compiled "
+		fprintf(stderr, "Sorry, this styxwire binary was compiled "
 				"without TCL scripting support\n");
 		return 1;
 #endif

@@ -1,11 +1,11 @@
 #!/bin/sh
-# cli.sh -- characterization tests for the hping3 command line.
+# cli.sh -- characterization tests for the styxwire command line.
 #
 # Only code paths that run before any socket is opened are exercised:
 # --help, --version and option validation. Runs as any user, needs no
 # network. Exit status 0 when every check passes.
 
-H=./hping3
+H=./styxwire
 fail=0
 n=0
 
@@ -21,7 +21,7 @@ check()
 # --help / --version: exit 0, output on stdout, nothing on stderr
 out=`$H --help 2>/dev/null`; rc=$?
 check "$rc" 0 "--help exit status"
-check "`echo "$out" | head -1`" "usage: hping host [options]" "--help first line"
+check "`echo "$out" | head -1`" "usage: styxwire host [options]" "--help first line"
 check "`$H --help 2>&1 >/dev/null | wc -c | tr -d ' '`" 0 "--help writes nothing to stderr"
 check "`$H -h | grep -c -- '--fast      alias for -i u100000'`" 1 "--fast help text matches the code"
 check "`$H -h | grep -c -- '--faster    alias for -i u1 '`" 1 "--faster help text matches the code"
@@ -29,7 +29,8 @@ check "`$H -h | grep -c 'winsize (default 512)'`" 1 "-w default in help matches 
 
 out=`$H --version 2>/dev/null`; rc=$?
 check "$rc" 0 "--version exit status"
-check "`echo "$out" | head -1 | cut -d' ' -f1-2`" "hping version" "--version output"
+check "`echo "$out" | grep -c 'based on hping3 3.0.0-alpha-1'`" 1 "--version names the hping3 base"
+check "`echo "$out" | head -1 | cut -d' ' -f1-2`" "StyxWire version" "--version output"
 out=`$H -v`; check "$?" 0 "-v exit status"
 
 # no arguments: the Tcl shell (exit 0 at EOF of stdin) when scripting is
@@ -98,6 +99,24 @@ check "$rc" 1 "-E without -d"
 check "`echo "$out" | grep -c 'useless without -d'`" 1 "-E without -d message"
 out=`$H --rand-dest x.x.x.x 2>&1`; rc=$?
 check "$rc" 1 "--rand-dest without -I"
+
+# --dry-run: builds and prints packets, sends nothing, needs no root.
+# stdout carries the banner and the dry-run lines; extract the hex.
+out=`$H --dry-run -c 2 -S -p 80 -a 10.0.0.1 10.0.0.2 2>/dev/null`; rc=$?
+check "$rc" 0 "--dry-run exit status (no root)"
+check "`echo "$out" | grep -c '^dry-run: to 10.0.0.2, 40 bytes: 4500'`" 2 "--dry-run prints two 40-byte IP datagrams"
+hex=`echo "$out" | grep '^dry-run:' | head -1 | sed 's/.*: //'`
+# TCP SYN from 10.0.0.1 to 10.0.0.2 port 80: proto 06 (IP byte 9 = hex 19-20),
+# dport 0050 (TCP bytes 3-4 = hex 45-48), SYN flag 02 (TCP byte 13 = hex 65-66)
+check "`echo "$hex" | cut -c19-20`" "06" "--dry-run built IP proto is TCP"
+check "`echo "$hex" | cut -c45-48`" "0050" "--dry-run built TCP dport is 80"
+check "`echo "$hex" | cut -c67-68`" "02" "--dry-run built TCP flag is SYN"
+uhex=`$H --dry-run --udp -c 1 10.0.0.2 2>/dev/null | grep '^dry-run:' | head -1 | sed 's/.*: //'`
+check "`echo "$uhex" | cut -c19-20`" "11" "--dry-run --udp built IP proto is UDP"
+if command -v strace >/dev/null; then
+	# no raw socket is opened (interface discovery still uses a UDP socket)
+	check "`strace -f -qq -e trace=socket $H --dry-run -c 1 -S 10.0.0.2 2>&1 >/dev/null | grep -c 'SOCK_RAW'`" 0 "--dry-run opens no raw socket"
+fi
 
 # unknown / ambiguous options
 out=`$H --no-such-option 192.0.2.1 2>&1`; rc=$?

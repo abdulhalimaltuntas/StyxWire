@@ -1,5 +1,8 @@
-hping3 -- building, testing and installing
-==========================================
+StyxWire -- building, testing and installing
+============================================
+
+(StyxWire is the continuation of hping3; the binary is "styxwire", with
+hping3/hping2/hping installed as compatibility symlinks.)
 
 Requirements
 ------------
@@ -7,10 +10,13 @@ Requirements
   - a C compiler (GCC or Clang; C99 or later)
   - GNU make (called "gmake" on the BSDs)
   - libpcap with its headers (libpcap-dev / libpcap-devel)
-  - optional: Tcl 8.6 with its headers (tcl-dev / tcl-devel) for the
-    scripting mode. Without Tcl, hping3 builds as a command line tool only.
-  - root privileges are needed to *run* hping3 (raw sockets, packet
-    capture), never to build or test it.
+  - optional: Tcl with its headers (tcl-dev / tcl-devel) for the
+    scripting mode; Tcl 8.6 and Tcl 9.0 both work. Without Tcl, styxwire
+    builds as a command line tool only.
+  - root privileges are needed to *send/capture* with styxwire (raw
+    sockets), never to build or test it, nor for --dry-run and the
+    offline "styxwire build/describe/validate" commands.
+  - optional: clang for the libFuzzer targets (make fuzz).
 
 Supported/tested platforms
 --------------------------
@@ -47,8 +53,10 @@ configure options and variables
   Tcl is looked for, in this order, through TCL_CONFIG, TCLSH,
   pkg-config (tcl, tcl9.0, tcl8.6, tcl8.5), the usual tclConfig.sh
   locations and finally a tclsh in PATH. A found Tcl is only used if a
-  test program builds and links against it. Tcl 8.6 is the version the
-  test-suite runs with; Tcl 9 detection exists but is not verified yet.
+  test program builds and links against it. The test-suite has been run
+  against both Tcl 8.6 and Tcl 9.0; point TCL_CONFIG at a tclConfig.sh to
+  pick a specific one, e.g.
+      TCL_CONFIG=/opt/tcl9/lib/tclConfig.sh ./configure --with-tcl
 
   libpcap is located through pkg-config or pcap-config, falling back to
   plain -lpcap. configure exits with status 1 if pcap.h/libpcap, the
@@ -70,6 +78,8 @@ make targets
   make install         install into DESTDIR/prefix (see below)
   make uninstall       remove what install created
   make libars.a        the ARS packet library as a static archive
+  make fuzz            build the libFuzzer targets (needs clang), then
+                       tests/fuzz_split, tests/fuzz_apd, tests/fuzz_opts
   make clean / distclean
 
 Installation layout and staging
@@ -102,6 +112,12 @@ Test-suite
 
   The historical scripts in lib/regtest send real packets and are not
   part of "make check".
+
+  make fuzz builds three libFuzzer drivers (clang): fuzz_split (the packet
+  dissector), fuzz_apd (the APD parser) and fuzz_opts (the command line
+  parser). Run one with e.g.
+      tests/fuzz_split -max_len=2048 corpus/
+  A fixed run finding nothing is not a proof of absence.
 
 Historical notes
 ----------------

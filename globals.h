@@ -98,6 +98,7 @@ struct hping_config {
 			opt_ssrr,		/* runtime-adjusted: cleared if too long */
 			opt_beep,
 			opt_flood,
+			opt_dry_run,
 			opt_force_icmp;
 
 	/* values with a run time life of their own, initialised from the

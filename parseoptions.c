@@ -38,7 +38,7 @@ enum {	OPT_COUNT, OPT_INTERVAL, OPT_NUMERIC, OPT_QUIET, OPT_INTERFACE,
 	OPT_ICMP_IPSRC, OPT_ICMP_IPDST, OPT_ICMP_SRCPORT, OPT_ICMP_DSTPORT,
 	OPT_ICMP_GW, OPT_FORCE_ICMP, OPT_APD_SEND, OPT_SCAN, OPT_FASTER,
 	OPT_BEEP, OPT_FLOOD, OPT_CLOCK_SKEW, OPT_CS_WINDOW, OPT_CS_WINDOW_SHIFT,
-        OPT_CS_VECTOR_LEN };
+        OPT_CS_VECTOR_LEN, OPT_DRY_RUN };
 
 static struct ago_optlist hping_optlist[] = {
 	{ 'c',	"count",	OPT_COUNT,		AGO_NEEDARG },
@@ -127,6 +127,7 @@ static struct ago_optlist hping_optlist[] = {
 	{ '\0', "force-icmp",	OPT_FORCE_ICMP,		AGO_NOARG },
 	{ '\0', "beep",		OPT_BEEP,		AGO_NOARG },
 	{ '\0', "flood",	OPT_FLOOD,		AGO_NOARG },
+	{ '\0', "dry-run",	OPT_DRY_RUN,		AGO_NOARG },
 	{ '\0', "clock-skew",	OPT_CLOCK_SKEW,		AGO_NOARG },
 	{ '\0', "clock-skew-win", OPT_CS_WINDOW,	AGO_NEEDARG},
 	{ '\0', "clock-skew-win-shift", OPT_CS_WINDOW_SHIFT,	AGO_NEEDARG},
@@ -150,7 +151,7 @@ static int suidtester(void)
  * hex, 0 octal), must be entirely consumed and must fit the range given
  * by the caller, which is the width of the protocol field the value ends
  * up in. A bad value is a usage error: a diagnostic naming the option,
- * the value and the accepted range is printed and hping exits with 1. */
+ * the value and the accepted range is printed and styxwire exits with 1. */
 /* Set by bad_number(): parse_options() checks it after every option and
  * returns HPING_PARSE_ERROR (the diagnostic was already printed). */
 static int parse_failed = 0;
@@ -158,7 +159,7 @@ static int parse_failed = 0;
 static void bad_number(const char *opt, const char *s, const char *why,
 		       long long min, unsigned long long max)
 {
-	fprintf(stderr, "hping: option %s: invalid value '%s' (%s; "
+	fprintf(stderr, "styxwire: option %s: invalid value '%s' (%s; "
 		"expected a number in the range %lld..%llu)\n",
 		opt, s, why, min, max);
 	parse_failed = 1;
@@ -226,7 +227,7 @@ int parse_route(unsigned char *route, unsigned int *route_len, const char *arg)
     char str[1024]; /* tokenised in place: work on a copy of the argument */
 
     if (strlen(arg) >= sizeof(str)) {
-        fprintf(stderr, "hping: route too long\n");
+        fprintf(stderr, "styxwire: route too long\n");
         return -1;
     }
     strcpy(str, arg);
@@ -240,7 +241,7 @@ int parse_route(unsigned char *route, unsigned int *route_len, const char *arg)
             case '/':
                 if (n >= 62)
                 {
-                    fprintf(stderr, "hping: too long route\n");
+                    fprintf(stderr, "styxwire: too long route\n");
                     return -1;
                 }
                 str[j] = '\0';
@@ -252,7 +253,7 @@ int parse_route(unsigned char *route, unsigned int *route_len, const char *arg)
                         str[j++] = '/';
                     break;
                 }
-                fprintf(stderr, "hping: invalid IP address in route: '%s'\n", str+i);
+                fprintf(stderr, "styxwire: invalid IP address in route: '%s'\n", str+i);
                 return -1;
             case ':':
                 if ((!i) && j && j < 4)
@@ -265,7 +266,7 @@ int parse_route(unsigned char *route, unsigned int *route_len, const char *arg)
                     }
                 }
             default:
-                fprintf(stderr, "hping: invalid route syntax (try --route-help)\n");
+                fprintf(stderr, "styxwire: invalid route syntax (try --route-help)\n");
                 return -1;
         }
         i = j;
@@ -296,8 +297,8 @@ int parse_options(int argc, char **argv)
 	delay_changed = 0;
 	antigetopt(0, NULL, NULL); /* reset the parser state */
 	if (argc < 2) {
-		fprintf(stderr, "hping: missing host argument\n"
-			"Try `hping --help' for more information.\n");
+		fprintf(stderr, "styxwire: missing host argument\n"
+			"Try `styxwire --help' for more information.\n");
 		return HPING_PARSE_ERROR;
 	}
 
@@ -308,12 +309,12 @@ int parse_options(int argc, char **argv)
 		case AGO_UNKNOWN:
 		case AGO_REQARG:
 		case AGO_AMBIG:
-			ago_gnu_error("hping", o);
-			fprintf(stderr, "Try hping --help\n");
+			ago_gnu_error("styxwire", o);
+			fprintf(stderr, "Try styxwire --help\n");
 			return HPING_PARSE_ERROR;
 		case AGO_ALONE:
 			if (targethost_set == 1) {
-				fprintf(stderr, "hping: you must specify only "
+				fprintf(stderr, "styxwire: you must specify only "
 						"one target host at a time\n");
 				return HPING_PARSE_ERROR;
 			} else {
@@ -451,7 +452,7 @@ int parse_options(int argc, char **argv)
 				free(cfg.opt_scanports);
 			cfg.opt_scanports = strdup(ago_optarg);
 			if (cfg.opt_scanports == NULL) {
-				fprintf(stderr, "hping: out of memory\n");
+				fprintf(stderr, "styxwire: out of memory\n");
 				return HPING_PARSE_ERROR;
 			}
 			break;
@@ -529,7 +530,7 @@ int parse_options(int argc, char **argv)
 				if (*ago_optarg == '\0' || *ago_optarg == '-' ||
 				    end == ago_optarg || *end != '\0' ||
 				    errno == ERANGE || tos_tmp > 0xff) {
-					fprintf(stderr, "hping: option -o/--tos: "
+					fprintf(stderr, "styxwire: option -o/--tos: "
 						"invalid value '%s' (expected two "
 						"hex digits, try --tos help)\n",
 						ago_optarg);
@@ -661,7 +662,7 @@ int parse_options(int argc, char **argv)
 			free(cfg.apd_send);
 			cfg.apd_send = strdup(ago_optarg);
 			if (cfg.apd_send == NULL) {
-				fprintf(stderr, "hping: out of memory\n");
+				fprintf(stderr, "styxwire: out of memory\n");
 				return HPING_PARSE_ERROR;
 			}
 			break;
@@ -670,6 +671,9 @@ int parse_options(int argc, char **argv)
 			break;
 		case OPT_FLOOD:
 			cfg.opt_flood = TRUE;
+			break;
+		case OPT_DRY_RUN:
+			cfg.opt_dry_run = TRUE;
 			break;
                 case OPT_CLOCK_SKEW:
 			cfg.opt_tcp_timestamp = TRUE;
@@ -709,13 +713,13 @@ int parse_options(int argc, char **argv)
 	{
 		fprintf(stderr,
 		"you must specify a target host if you require safe protocol\n"
-		"because hping needs a target for HCMP packets\n");
+		"because styxwire needs a target for HCMP packets\n");
 		return HPING_PARSE_ERROR;
 	}
 
 	if (targethost_set == 0 && !cfg.opt_listenmode && cfg.apd_send == NULL) {
-		fprintf(stderr, "hping: missing host argument\n"
-			"Try `hping --help' for more information.\n");
+		fprintf(stderr, "styxwire: missing host argument\n"
+			"Try `styxwire --help' for more information.\n");
 		return HPING_PARSE_ERROR;
 	}
 
@@ -749,7 +753,7 @@ int parse_options(int argc, char **argv)
 	{
 		fprintf(stderr, 
 	"Option error: signature (%d bytes) is larger than data size\n"
-	"check -d option, don't specify -d to let hping compute it\n", cfg.signlen);
+	"check -d option, don't specify -d to let styxwire compute it\n", cfg.signlen);
 		return HPING_PARSE_ERROR;
 	}
 	else if ((cfg.opt_sign || cfg.opt_listenmode) && cfg.signlen > 1024)

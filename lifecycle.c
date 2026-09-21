@@ -38,6 +38,7 @@
 #include <signal.h>
 #include <unistd.h>
 #include <poll.h>
+#include <time.h>
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -279,28 +280,33 @@ int hping_init(void)
 			cfg.ifname, ctx.ifstraddr, ctx.h_if_mtu);
 	}
 
-	/* open raw socket */
-	ctx.sockraw = open_sockraw();
-	if (ctx.sockraw == -1) {
-		fprintf(stderr, "[main] can't open raw socket\n");
-		return -1;
-	}
+	/* --dry-run builds packets but sends nothing and reads nothing, so
+	 * it needs neither the raw socket nor the capture handle (and thus
+	 * no privileges). Everything else is set up as usual. */
+	if (!cfg.opt_dry_run) {
+		/* open raw socket */
+		ctx.sockraw = open_sockraw();
+		if (ctx.sockraw == -1) {
+			fprintf(stderr, "[main] can't open raw socket\n");
+			return -1;
+		}
 
-	/* set SO_BROADCAST option */
-	socket_broadcast(ctx.sockraw);
-	/* set SO_IPHDRINCL option */
-	socket_iphdrincl(ctx.sockraw);
+		/* set SO_BROADCAST option */
+		socket_broadcast(ctx.sockraw);
+		/* set SO_IPHDRINCL option */
+		socket_iphdrincl(ctx.sockraw);
 
-	/* open sock packet or libpcap socket */
-	if (open_pcap() == -1) {
-		fprintf(stderr, "[main] open_pcap failed\n");
-		return -1;
-	}
+		/* open sock packet or libpcap socket */
+		if (open_pcap() == -1) {
+			fprintf(stderr, "[main] open_pcap failed\n");
+			return -1;
+		}
 
-	/* get physical layer header size */
-	if ( get_linkhdr_size(cfg.ifname) == -1 ) {
-		fprintf(stderr, "[main] physical layer header size unknown\n");
-		return -1;
+		/* get physical layer header size */
+		if ( get_linkhdr_size(cfg.ifname) == -1 ) {
+			fprintf(stderr, "[main] physical layer header size unknown\n");
+			return -1;
+		}
 	}
 
 	if (resolve_or_fail(&ctx.local, cfg.spoofaddr[0] ? cfg.spoofaddr : ctx.ifstraddr) == -1)
@@ -374,7 +380,7 @@ static void print_banner(void)
 		hdr_size = IPHDR_SIZE + TCPHDR_SIZE;
 	}
 
-	printf("HPING %s (%s %s): %s set, %d headers + %d data bytes\n",
+	printf("STYXWIRE %s (%s %s): %s set, %d headers + %d data bytes\n",
 		cfg.targetname,
 		cfg.ifname,
 		ctx.targetstraddr,
@@ -421,7 +427,7 @@ static int send_due_probe(long long now)
 
 static int flood_loop(void)
 {
-	fprintf(stderr, "hping in flood mode, no replies will be shown\n");
+	fprintf(stderr, "styxwire in flood mode, no replies will be shown\n");
 	while (!hping_stop_requested()) {
 		if (send_packet() == -1) {
 			hping_stop(HPING_STOP_ERROR);
@@ -474,6 +480,17 @@ static int main_loop(void)
 		if (timeout < 0)
 			timeout = 0;
 
+		if (cfg.opt_dry_run) {
+			/* no capture handle: just pace the sending */
+			if (timeout > 0) {
+				struct timespec ts;
+				ts.tv_sec = timeout / 1000000;
+				ts.tv_nsec = (timeout % 1000000) * 1000;
+				nanosleep(&ts, NULL);
+			}
+			handle_pending_signals();
+			continue;
+		}
 		r = ctx.io.wait(timeout);
 		if (r < 0) {
 			perror("[hping_run] waiting for packets");
@@ -489,7 +506,7 @@ static int main_loop(void)
 int hping_run(void)
 {
 	if (cfg.opt_listenmode) {
-		fprintf(stderr, "hping2 listen mode\n");
+		fprintf(stderr, "styxwire listen mode\n");
 		lock_memory();
 		listen_run();
 	} else if (cfg.opt_scanmode) {
@@ -498,6 +515,9 @@ int hping_run(void)
 		return scan_run();
 	} else {
 		print_banner();
+		if (cfg.opt_dry_run)
+			fprintf(stderr, "styxwire dry-run: building packets, "
+					"nothing is sent\n");
 		if (cfg.opt_datafromfile || cfg.opt_sign)
 			lock_memory();
 		if (cfg.opt_flood)

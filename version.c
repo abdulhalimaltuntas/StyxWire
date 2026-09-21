@@ -18,11 +18,11 @@
 
 void show_version(void)
 {
-	printf("hping version %s (%s)\n", RELEASE_VERSION, RELEASE_DATE);
+	printf("%s version %s (based on hping3 %s)\n",
+		STYXWIRE_NAME, STYXWIRE_VERSION, RELEASE_VERSION);
 #ifdef USE_TCL
 	printf("This binary is TCL scripting capable\n");
 #else
 	printf("NO TCL scripting support compiled in\n");
 #endif
 }
-

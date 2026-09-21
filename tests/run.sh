@@ -34,6 +34,7 @@ done
 run_one "tests/cli.sh" sh tests/cli.sh
 run_one "tests/install.sh" sh tests/install.sh
 run_one "tests/libars.sh" sh tests/libars.sh
+run_one "tests/rcfile.sh" sh tests/rcfile.sh
 
 echo "----------------------------------------"
 echo "test-suite: $passed passed, $failed failed, $skipped skipped"

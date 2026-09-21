@@ -112,6 +112,20 @@ int send_ip (char* src, char *dst, char *data, unsigned int datalen,
             printf("%.2X ", packet[i]&255);
         printf("\n");
     }
+	if (cfg.opt_dry_run) {
+		/* --dry-run: report the datagram instead of sending it.
+		 * One line per IP datagram (fragments included), hex. */
+		int i;
+		printf("dry-run: to %s, %d bytes: ",
+			inet_ntoa(ctx.remote.sin_addr), packetsize);
+		for (i = 0; i < packetsize; i++)
+			printf("%.2x", (unsigned char) packet[i]);
+		printf("\n");
+		free(packet);
+		if (cfg.opt_safe && !ctx.eof_reached)
+			cfg.src_id++;
+		return 0;
+	}
 	result = sendto(ctx.sockraw, packet, packetsize, 0,
 		(struct sockaddr*)&ctx.remote, sizeof(ctx.remote));
 	free(packet);

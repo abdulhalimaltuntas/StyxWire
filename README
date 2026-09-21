@@ -1,88 +1,70 @@
-hping3 README file
-antirez@invece.org
+StyxWire README
+===============
 
-DESCRIPTION
+StyxWire is a network tool that sends custom TCP/IP packets and displays
+target replies, the way ping does with ICMP. It handles fragmentation and
+almost arbitrary packet size and content from the command line, and it
+embeds a Tcl scripting engine and the APD packet description language for
+building and dissecting packets programmatically.
 
-	hping3 is a network tool able to send custom TCP/IP
-	packets and to display target replies like ping do with
-	ICMP replies. hping3 can handle fragmentation, and
-	almost arbitrary packet size and content, using the
-	command line interface.
+It is the continuation of hping3 by Salvatore Sanfilippo. The command
+line, the exit codes, the Tcl API and the APD language are kept
+compatible; the binary is installed as "styxwire" with "hping3", "hping2"
+and "hping" as symbolic links, so existing scripts keep working.
 
-	Since version 3, hping implements scripting capabilties,
-	read the API.txt file under the /docs directory to know
-	more about it.
+WHAT IT IS USED FOR
 
-	As a command line utility, hping is useful to test at
-	many kind of networking devices like firewalls, routers,
-	and so. It can be used as a traceroute alike program over all
-	the supported protocols, firewalk usage, OS fingerprinting,
-	port-scanner (see the --scan option introduced with hping3),
-	TCP/IP stack auditing.
+	- Firewall and ACL testing
+	- Advanced/port scanning (--scan)
+	- Network performance tests with different protocols, sizes,
+	  TOS and fragmentation
+	- Path MTU discovery
+	- Traceroute over arbitrary protocols
+	- Remote OS fingerprinting and TCP/IP stack auditing
+	- Teaching and learning TCP/IP
 
-	It's also really a good didactic tool to learn TCP/IP.
-
-	Using Tcl/Tk scripting much more can be done, because
-	while the hping3 packet generation code is actually the
-	hping2 put there mainly for compatibility with the command
-	line interface, all the real news are about scripting.
-
-	See the libs directory for example scripts. To run
-	the example scripts type:
-
-		hping3 exec ScriptName.htcl <arguments, if required>
-
-	hping3 is developed and manteined by antirez@invece.org
-	with the help of other hackers, and comes under GPL version
-	2 of license. Development is open so you can send me
-	patches/suggestions/affronts without inhibitions.
-
-	Please check the AUTHORS file for a list of people that
-	contribued with code, ideas, bug reports.
-
-	Also vim developer, ee.lbl.gov for tcpdump and GNU in general.
-
-DOCUMENTATION
-
-	For the hping3 API check docs/API.txt
-
-	You can find documentation about hping3 specific functions
-	at http://wiki.hping.org
-
-	Make sure to check the page at http://wiki.hping.org/34
+	Sending and capturing packets needs root (raw sockets); building
+	and dissecting do not. --dry-run and the offline Tcl commands
+	(styxwire build/describe/validate) run as an ordinary user.
 
 BUILDING AND TESTING
 
 	$ ./configure          (./configure --help lists the options)
 	$ make
-	$ make check           offline test-suite: no root, no network traffic
+	$ make check           offline test-suite: no root, no traffic
 	# make install         or: make install DESTDIR=/some/stage
 
-	See the INSTALL file for the details (Tcl on/off, staged
-	installation, sanitizer builds, cross compiling notes).
+	See INSTALL for the details (Tcl on/off, staged installation,
+	sanitizer builds, fuzzing, cross compiling). The development
+	reports for this tree are docs/ASAMA1-RAPORU.md,
+	docs/ASAMA2-RAPORU.md and docs/ASAMA3-RAPORU.md; the design
+	decisions are in docs/KARAR-KAYITLARI.md (all in Turkish).
 
-	Status of the current work on this tree, the list of known
-	problems and the roadmap: docs/ASAMA1-RAPORU.md (in Turkish).
+SCRIPTING
+
+	Run an example script from the lib directory with:
+
+		styxwire exec ScriptName.htcl <arguments, if required>
+
+	The Tcl API is documented in docs/API.txt, the APD packet
+	description language in docs/APD.txt. The startup file is
+	~/.styxwirerc (falling back to ~/.hpingrc); STYXWIRE_NORC disables
+	it and STYXWIRE_RC=path selects a specific one.
 
 REQUIREMENTS
 
 	A supported unix-like OS (Linux is the tested one), a C compiler,
-	GNU make, libpcap with headers. Root access is needed to run
-	hping3, not to build or test it.
+	GNU make, libpcap with headers. Tcl 8.6 or 9 (with headers) is
+	optional but strongly suggested.
 
-	Tcl 8.6 (with headers) is optional but strongly suggested.
+CREDITS
 
-HISTORICAL NOTES
+	StyxWire builds on hping3 by Salvatore Sanfilippo (antirez) and
+	the many contributors listed in the AUTHORS file. The original
+	hping site was http://www.hping.org.
 
-	The original source was hosted on SourceForge CVS
-	(cvs.hping2.sourceforge.net, module hping3s) and released at
-	http://www.hping.org; those services are not maintained by this
-	tree. The web/wiki links in the documentation are kept as
-	historical references.
+	This continuation: https://github.com/abdulhalimaltuntas/StyxWire
 
-INSTALLATION
+	Covered by GPL version 2, read the COPYING file for details.
 
-	see INSTALL file.
-
-have fun,
-antirez
+have fun

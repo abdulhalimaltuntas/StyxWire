@@ -243,6 +243,62 @@ static void test_commands(Tcl_Interp *interp)
 	CHECK(strstr(res, "Bad option") != NULL);
 	CHECK_EQ_INT(eval(interp, "set hping_version", &res), TCL_OK);
 	CHECK_EQ_STR(res, RELEASE_VERSION);
+
+	TEST("the styxwire command name is registered alongside hping");
+	CHECK_EQ_INT(eval(interp, "set styxwire_version", &res), TCL_OK);
+	CHECK_EQ_STR(res, STYXWIRE_VERSION);
+	CHECK_EQ_INT(eval(interp, "styxwire checksum abcd", &res), TCL_OK);
+}
+
+static void test_offline(Tcl_Interp *interp)
+{
+	const char *res;
+
+	TEST("hping build/describe: APD -> binary -> APD round trip, no socket");
+	CHECK_EQ_INT(eval(interp,
+		"hping describe [hping build "
+		"{ip(saddr=1.2.3.4,daddr=5.6.7.8,ttl=7)+tcp(sport=1,dport=80,flags=s)}]",
+		&res), TCL_OK);
+	CHECK(strstr(res, "ip(") == res);
+	CHECK(strstr(res, "saddr=1.2.3.4") != NULL);
+	CHECK(strstr(res, "ttl=7") != NULL);
+	CHECK(strstr(res, "+tcp(sport=1,dport=80,") != NULL);
+	CHECK(strstr(res, "flags=s") != NULL);
+
+	TEST("hping build: -nocompile keeps the given (bogus) checksum/len");
+	CHECK_EQ_INT(eval(interp,
+		"binary scan [hping build -nocompile "
+		"{ip(saddr=1.2.3.4,daddr=5.6.7.8,cksum=0x1111,totlen=99)+udp(sport=1,dport=2,cksum=0)}] "
+		"H4 tl", &res), TCL_OK); /* first 2 bytes: version/ihl + tos */
+
+	TEST("hping build: byte length matches the packet");
+	CHECK_EQ_INT(eval(interp,
+		"string length [hping build {ip(daddr=1.2.3.4)+icmp(type=8)+data(str=hello)}]",
+		&res), TCL_OK);
+	CHECK_EQ_STR(res, "33"); /* 20 IP + 8 ICMP + 5 data */
+
+	TEST("hping build: an invalid description is a Tcl error");
+	CHECK_EQ_INT(eval(interp, "hping build {ip()+nosuchlayer()}", &res), TCL_ERROR);
+	CHECK(strstr(res, "building error") != NULL);
+	CHECK_EQ_INT(eval(interp, "hping build {tcp(dport=80)}", &res), TCL_ERROR);
+	CHECK(strstr(res, "compilation error") != NULL); /* TCP checksum needs IP */
+
+	TEST("hping describe: -hex data and short packets");
+	CHECK_EQ_INT(eval(interp,
+		"hping describe -hex [hping build {ip(daddr=1.2.3.4)+data(hex=00ff10)}]", &res), TCL_OK);
+	CHECK(strstr(res, "data(hex=00ff10)") != NULL);
+	CHECK_EQ_INT(eval(interp, "hping describe [binary format H* 4500]", &res), TCL_OK);
+
+	TEST("hping validate: good and bad descriptions");
+	CHECK_EQ_INT(eval(interp, "hping validate {ip(daddr=1.2.3.4)+tcp(dport=80)}", &res), TCL_OK);
+	CHECK_EQ_STR(res, "1");
+	CHECK_EQ_INT(eval(interp, "hping validate {ip()+bogus()}", &res), TCL_OK);
+	CHECK(strstr(res, "Unknown keyword") != NULL);
+
+	TEST("hping build result feeds hping describe as a byte array (binary safe)");
+	CHECK_EQ_INT(eval(interp,
+		"hping describe [hping build {ip(daddr=1.2.3.4)+data(hex=00010280ff)}]", &res), TCL_OK);
+	CHECK(strstr(res, "data(") != NULL);
 }
 
 int main(void)
@@ -270,6 +326,7 @@ int main(void)
 	}
 	test_recv_packets(interp);
 	test_commands(interp);
+	test_offline(interp);
 	Tcl_DeleteInterp(interp);
 	rmdir(home);
 	return tu_report("test_script");

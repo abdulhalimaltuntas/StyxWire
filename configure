@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# hping3 configure script.
+# StyxWire configure script.
 #
 # Plain POSIX sh, no autoconf. Detects the toolchain, libpcap, the optional
 # Tcl runtime and a few platform features, then writes Makefile, byteorder.h,
@@ -39,7 +39,7 @@ usage: ./configure [options]
   --prefix=DIR           installation prefix              [$PREFIX]
   --sbindir=DIR          binary directory                 [PREFIX/sbin]
   --mandir=DIR           manual directory                 [PREFIX/share/man]
-  --datadir=DIR          data directory (Tcl scripts)     [PREFIX/share]
+  --datadir=DIR          data directory (Tcl library)     [PREFIX/share]
   --no-tcl               disable Tcl scripting support
   --with-tcl             require Tcl scripting support (fail if not found)
 
@@ -410,7 +410,7 @@ CPPFLAGS = $CPPFLAGS
 CFLAGS = $CFLAGS
 LDFLAGS = $LDFLAGS
 LDLIBS = $LDLIBS
-DEFS = $DEFS
+DEFS = $DEFS -DSTYXWIRE_LIBDIR=\"$DATADIR/styxwire/lib\"
 PCAP_CFLAGS = $PCAP_CFLAGS
 PCAP_LIBS = $PCAP_LIBS
 SOLARISLIB = $SOLARISLIB
@@ -453,6 +453,6 @@ prefix       : $PREFIX
 sbindir      : $SBINDIR
 mandir       : $MANDIR
 --------------------------------------
-now you can try \`make' (and \`make check' to run the tests)
+now you can try \`make' (and \`make check' to run the tests) to build styxwire
 EOF
 exit 0

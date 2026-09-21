@@ -118,3 +118,42 @@ ayıran ve testleri bağımsızlaştıran ara adımdır.
 **Geri alma/ilerleme koşulu.** Birden çok eşzamanlı oturum (örn. Tcl'den
 iki hedef) gerektiğinde `ctx` parametre olarak geçirilir; `cfg`'deki
 "runtime-adjusted" alanlar `ctx`'e taşınır.
+
+## KK-7 — Ürün adı StyxWire; hping3 uyumluluğu symlink ile korunur (Aşama 3)
+
+**Bağlam.** Proje StyxWire olarak yeniden adlandırıldı. Binary adı, tanı
+mesajları, man sayfası ve Tcl komut adı bundan etkilenir; ancak mevcut
+betikler ve otomasyon `hping3`/`hping`/`hping2` adlarını ve çıktı biçimini
+bekliyor.
+
+**Karar.** Binary `styxwire`; kurulumda `hping3`, `hping2`, `hping` göreli
+symlink olarak kurulur; man sayfası `styxwire.8`, `hping3.8` ona symlink.
+Tcl'de hem `styxwire` hem `hping` komutu kayıtlı; `styxwire_version`
+değişkeni eklendi, `hping_version` (hping3 taban sürümü) korundu. Başlangıç
+dosyası `~/.styxwirerc`, yoksa `~/.hpingrc`. Çıktı satır biçimleri
+(istatistik başlığı hariç ürün adı büyük harf `STYXWIRE`) korundu.
+Kaynaktaki `hping2.h`/`hping_*` API adları ve `hping3.8` içindeki tarihî
+gönderim değişmedi (iç adlar; kullanıcıya görünmez).
+
+**Gerekçe.** Ad değişikliği kullanıcıya görünen bir karardır; geriye
+uyumluluğu kırmadan yapılması için symlink + çift komut adı en düşük
+maliyetli yoldur. Sürüm ayrımı (`STYXWIRE_VERSION` vs `RELEASE_VERSION`)
+"sürüm numarasını sırf görünüm için değiştirme" ilkesine uyar: taban hping3
+sürümü `--version`'da açıkça belirtilir.
+
+**Geri alma.** Yok; symlink'ler ileride kaldırılırsa geçiş notu gerekir.
+
+## KK-8 — Tcl sürüm desteği: 8.6 ve 9, tek kaynak (Aşama 3)
+
+**Bağlam.** Tcl 9, `Tcl_Obj *CONST` makrosunu kaldırdı ve uzunluk/indeks
+türlerini `Tcl_Size`'a çevirdi (resmî geçiş rehberi).
+
+**Karar.** Kaynak `Tcl_Obj *const objv[]` kullanır (her iki sürümde
+geçerli); `Tcl_Size` Aşama 1'de 8.x için typedef edilmişti. Tek kaynak iki
+sürümde de `-Werror` ile derlenir ve tüm test paketi geçer. Sürüm keşfi
+`configure`'da (`TCL_CONFIG`/pkg-config `tcl9.0`/`tcl8.6`).
+
+**Gerekçe.** Sürüm keşfini düzeltmek ile C API portu birbirine
+karıştırılmadı (prompt §6); tek fark `const` idi. Destek iddiası gerçek
+derleme + çalışma testine dayanır (Tcl 9.0.1 kaynağından derlenip
+doğrulandı).

@@ -73,7 +73,7 @@ int hping_stats_loss_percent(const struct hping_stats *s)
 
 void hping_stats_print(FILE *fp, const char *target)
 {
-	fprintf(fp, "\n--- %s hping statistic ---\n", target);
+	fprintf(fp, "\n--- %s styxwire statistic ---\n", target);
 	fprintf(fp, "%llu packets transmitted, %llu packets received, "
 		    "%d%% packet loss\n", stats.sent, stats.received,
 		    hping_stats_loss_percent(&stats));
@@ -94,5 +94,8 @@ int hping_exit_code(void)
 {
 	if (cfg.opt_tcpexitcode)
 		return ctx.tcp_exitcode;
+	/* --dry-run never receives a reply; "all packets built" is success */
+	if (cfg.opt_dry_run)
+		return 0;
 	return stats.received ? 0 : 1;
 }

@@ -22,6 +22,7 @@
 #include <netdb.h>
 #include <sched.h>
 
+#include <sys/stat.h>
 #include <sys/ioctl.h>
 #ifdef HAVE_NET_BPF_H
 #include <net/bpf.h>	/* BIOCIMMEDIATE on BSD systems */
@@ -113,7 +114,7 @@ static struct recv_handler *HpingRecvGetHandler(struct recv_handler *ra, int len
 /* ----------------------------- Sub commands ------------------------------- */
 /* hping resolve hostname */
 static int HpingResolveCmd(ClientData clientData, Tcl_Interp *interp,
-		int objc, Tcl_Obj *CONST objv[])
+		int objc, Tcl_Obj *const objv[])
 {
 	struct sockaddr_in saddr;
 	char *hostname;
@@ -167,7 +168,7 @@ static int rawsocket = -1;
 
 /* hping send ?-nocompile? pktdescr */
 static int HpingSendCmd(ClientData clientData, Tcl_Interp *interp,
-		int objc, Tcl_Obj *CONST objv[])
+		int objc, Tcl_Obj *const objv[])
 {
 	struct ars_packet p;
 	int nocompile = 0;
@@ -225,7 +226,7 @@ static int HpingSendCmd(ClientData clientData, Tcl_Interp *interp,
 
 /* hping sendraw pktdata */
 static int HpingSendRawCmd(ClientData clientData, Tcl_Interp *interp,
-		int objc, Tcl_Obj *CONST objv[])
+		int objc, Tcl_Obj *const objv[])
 {
 	int error;
 	Tcl_Obj *result;
@@ -446,7 +447,7 @@ static int HpingRecvPackets(struct recv_handler *ra, Tcl_Interp *interp, Tcl_Obj
  *
  * For default timeout is -1, maxpackets is 0 */
 static int __HpingRecvCmd(ClientData clientData, Tcl_Interp *interp,
-		int objc, Tcl_Obj *CONST objv[], int rapd, int hexdata)
+		int objc, Tcl_Obj *const objv[], int rapd, int hexdata)
 {
 	Tcl_Obj *result;
 	struct recv_handler *ra;
@@ -483,13 +484,13 @@ static int __HpingRecvCmd(ClientData clientData, Tcl_Interp *interp,
 
 /* The two wrappers for the __HpingRecvRawCmd() */
 static int HpingRecvRawCmd(ClientData clientData, Tcl_Interp *interp,
-		int objc, Tcl_Obj *CONST objv[])
+		int objc, Tcl_Obj *const objv[])
 {
 	return __HpingRecvCmd(clientData, interp, objc, objv, 0, 0);
 }
 
 static int HpingRecvCmd(ClientData clientData, Tcl_Interp *interp,
-		int objc, Tcl_Obj *CONST objv[])
+		int objc, Tcl_Obj *const objv[])
 {
 	char *firstarg;
 	int hexdata = 0;
@@ -507,7 +508,7 @@ static int HpingRecvCmd(ClientData clientData, Tcl_Interp *interp,
 
 /* hping getinterfaces */
 static int HpingGetInterfacesCmd(ClientData clientData, Tcl_Interp *interp,
-		int objc, Tcl_Obj *CONST objv[])
+		int objc, Tcl_Obj *const objv[])
 {
 	struct hpingif ifaces[HPING_IFACE_MAX];
 	int found, i;
@@ -580,7 +581,7 @@ static int HpingGetInterfacesCmd(ClientData clientData, Tcl_Interp *interp,
 
 /* hping outifaddr destaddr */
 static int HpingGetOutIfAddrCmd(ClientData clientData, Tcl_Interp *interp,
-		int objc, Tcl_Obj *CONST objv[])
+		int objc, Tcl_Obj *const objv[])
 {
 	struct sockaddr_in dest, ifaddr;
 	Tcl_Obj *result;
@@ -608,7 +609,7 @@ static int HpingGetOutIfAddrCmd(ClientData clientData, Tcl_Interp *interp,
 
 /* hping getfield layer field ?skip? packet */
 static int HpingGetFieldCmd(ClientData clientData, Tcl_Interp *interp,
-		int objc, Tcl_Obj *CONST objv[])
+		int objc, Tcl_Obj *const objv[])
 {
 	char *layer, *field, *value, *packet;
 	int skip = 0;
@@ -638,7 +639,7 @@ static int HpingGetFieldCmd(ClientData clientData, Tcl_Interp *interp,
 
 /* hping hasfield layer field ?skip? packet */
 static int HpingHasFieldCmd(ClientData clientData, Tcl_Interp *interp,
-		int objc, Tcl_Obj *CONST objv[])
+		int objc, Tcl_Obj *const objv[])
 {
 	char *layer, *field, *packet;
 	int skip = 0;
@@ -667,7 +668,7 @@ static int HpingHasFieldCmd(ClientData clientData, Tcl_Interp *interp,
 
 /* hping setfield layer field value ?skip? packet */
 static int HpingSetFieldCmd(ClientData clientData, Tcl_Interp *interp,
-		int objc, Tcl_Obj *CONST objv[])
+		int objc, Tcl_Obj *const objv[])
 {
 	char *layer, *field, *packet;
 	int skip = 0, vstart, vend;
@@ -700,7 +701,7 @@ static int HpingSetFieldCmd(ClientData clientData, Tcl_Interp *interp,
 
 /* hping delfield layer field ?skip? packet */
 static int HpingDelFieldCmd(ClientData clientData, Tcl_Interp *interp,
-		int objc, Tcl_Obj *CONST objv[])
+		int objc, Tcl_Obj *const objv[])
 {
 	char *layer, *field, *packet;
 	int skip = 0, fstart, vend;
@@ -740,7 +741,7 @@ static int HpingDelFieldCmd(ClientData clientData, Tcl_Interp *interp,
 
 /* hping checksum string */
 static int HpingChecksumCmd(ClientData clientData, Tcl_Interp *interp,
-		int objc, Tcl_Obj *CONST objv[])
+		int objc, Tcl_Obj *const objv[])
 {
 	Tcl_Obj *result;
 	u_int16_t cksum;
@@ -761,7 +762,7 @@ static int HpingChecksumCmd(ClientData clientData, Tcl_Interp *interp,
 
 /* hping setfilter ifname filter */
 static int HpingSetFilterCmd(ClientData clientData, Tcl_Interp *interp,
-		int objc, Tcl_Obj *CONST objv[])
+		int objc, Tcl_Obj *const objv[])
 {
 	struct recv_handler *ra;
 	struct bpf_program bpfp;
@@ -807,7 +808,7 @@ void HpingEventHandler(void *clientData, int mask)
 
 /* hping event ifname ?script? */
 static int HpingEventCmd(ClientData clientData, Tcl_Interp *interp,
-		int objc, Tcl_Obj *CONST objv[])
+		int objc, Tcl_Obj *const objv[])
 {
 	struct recv_handler *ra;
 	char *ifname;
@@ -863,7 +864,7 @@ static int HpingEventCmd(ClientData clientData, Tcl_Interp *interp,
 #if 0
 /* hping setfilter ifname filter */
 static int HpingSoftrealtimeCmd(ClientData clientData, Tcl_Interp *interp,
-		int objc, Tcl_Obj *CONST objv[])
+		int objc, Tcl_Obj *const objv[])
 {
 	struct sched_param sp;
 	int min, max, virtual_priority;
@@ -893,10 +894,131 @@ static int HpingSoftrealtimeCmd(ClientData clientData, Tcl_Interp *interp,
 }
 #endif
 
+/* ------------------------- offline commands ------------------------------- *
+ * build / describe / validate work on the ARS engine only: no socket, no
+ * capture device, so they run unprivileged and are what --dry-run and the
+ * tests exercise. */
+
+/* hping build ?-nocompile? pktdescr
+ * Return the packet described by 'pktdescr' as a binary byte array. */
+static int HpingBuildCmd(ClientData clientData, Tcl_Interp *interp,
+		int objc, Tcl_Obj *const objv[])
+{
+	struct ars_packet p;
+	int nocompile = 0;
+	unsigned char *packet;
+	size_t size;
+	char *packetdescr, *copy;
+
+	if (objc != 3 && objc != 4) {
+		Tcl_WrongNumArgs(interp, 2, objv, "?-nocompile? packet");
+		return TCL_ERROR;
+	}
+	if (objc == 4) {
+		if (strcmp(Tcl_GetString(objv[2]), "-nocompile")) {
+			Tcl_SetObjResult(interp, Tcl_NewStringObj("Invalid option", -1));
+			return TCL_ERROR;
+		}
+		nocompile = 1;
+		objv++;
+	}
+	packetdescr = Tcl_GetString(objv[2]);
+	copy = strdup(packetdescr); /* ars_d_build parses in place */
+	if (copy == NULL) {
+		Tcl_SetObjResult(interp, Tcl_NewStringObj("Out of memory", -1));
+		return TCL_ERROR;
+	}
+	ars_init(&p);
+	if (ars_d_build(&p, copy) != -ARS_OK) {
+		Tcl_SetObjResult(interp, Tcl_ObjPrintf("Packet building error: '%s' in packet %s",
+			p.p_error ? p.p_error : "?", packetdescr));
+		free(copy); ars_destroy(&p);
+		return TCL_ERROR;
+	}
+	free(copy);
+	if (!nocompile && ars_compile(&p) != -ARS_OK) {
+		Tcl_SetObjResult(interp, Tcl_ObjPrintf("Packet compilation error: %s",
+			p.p_error ? p.p_error : "?"));
+		ars_destroy(&p);
+		return TCL_ERROR;
+	}
+	if (ars_build_packet(&p, &packet, &size) != -ARS_OK) {
+		Tcl_SetObjResult(interp, Tcl_ObjPrintf("Packet build error: %s",
+			p.p_error ? p.p_error : "?"));
+		ars_destroy(&p);
+		return TCL_ERROR;
+	}
+	Tcl_SetObjResult(interp, Tcl_NewByteArrayObj(packet, size));
+	free(packet);
+	ars_destroy(&p);
+	return TCL_OK;
+}
+
+/* hping describe ?-hex? binary
+ * Return the APD description of a raw IPv4 packet (byte array). */
+static int HpingDescribeCmd(ClientData clientData, Tcl_Interp *interp,
+		int objc, Tcl_Obj *const objv[])
+{
+	unsigned char *data;
+	Tcl_Size len;
+	int hexdata = 0;
+	char *apd;
+
+	if (objc != 3 && objc != 4) {
+		Tcl_WrongNumArgs(interp, 2, objv, "?-hex? binary");
+		return TCL_ERROR;
+	}
+	if (objc == 4) {
+		if (strcmp(Tcl_GetString(objv[2]), "-hex")) {
+			Tcl_SetObjResult(interp, Tcl_NewStringObj("Invalid option", -1));
+			return TCL_ERROR;
+		}
+		hexdata = 1;
+		objv++;
+	}
+	data = Tcl_GetByteArrayFromObj(objv[2], &len);
+	apd = GetPacketDescription(interp, data, (int) len, hexdata);
+	if (apd == NULL)
+		return TCL_ERROR; /* message already set */
+	Tcl_SetObjResult(interp, Tcl_NewStringObj(apd, -1));
+	free(apd);
+	return TCL_OK;
+}
+
+/* hping validate pktdescr
+ * Non zero if the description builds and compiles, else zero; the error
+ * message (when zero) is left in the interpreter result. */
+static int HpingValidateCmd(ClientData clientData, Tcl_Interp *interp,
+		int objc, Tcl_Obj *const objv[])
+{
+	struct ars_packet p;
+	char *copy;
+	int ok;
+
+	if (objc != 3) {
+		Tcl_WrongNumArgs(interp, 2, objv, "packet");
+		return TCL_ERROR;
+	}
+	copy = strdup(Tcl_GetString(objv[2]));
+	if (copy == NULL) {
+		Tcl_SetObjResult(interp, Tcl_NewStringObj("Out of memory", -1));
+		return TCL_ERROR;
+	}
+	ars_init(&p);
+	ok = ars_d_build(&p, copy) == -ARS_OK && ars_compile(&p) == -ARS_OK;
+	if (!ok)
+		Tcl_SetObjResult(interp, Tcl_NewStringObj(p.p_error ? p.p_error : "invalid", -1));
+	else
+		Tcl_SetObjResult(interp, Tcl_NewIntObj(1));
+	free(copy);
+	ars_destroy(&p);
+	return TCL_OK;
+}
+
 /* ---------------------- hping command implementation ---------------------- */
 struct subcmd {
 	char *name;
-	int (*proc)(ClientData cd, Tcl_Interp *i, int, Tcl_Obj *CONST objv[]);
+	int (*proc)(ClientData cd, Tcl_Interp *i, int, Tcl_Obj *const objv[]);
 } subcmds[] = {
 	{ "resolve", HpingResolveCmd },
 	{ "send", HpingSendCmd },
@@ -911,6 +1033,9 @@ struct subcmd {
 	{ "setfield", HpingSetFieldCmd },
 	{ "delfield", HpingDelFieldCmd },
 	{ "checksum", HpingChecksumCmd },
+	{ "build", HpingBuildCmd },
+	{ "describe", HpingDescribeCmd },
+	{ "validate", HpingValidateCmd },
 	{ "event", HpingEventCmd },
 #if 0
 	{ "softrealtime", HpingSoftrealtimeCmd },
@@ -919,7 +1044,7 @@ struct subcmd {
 };
 
 static int HpingObjCmd(ClientData clientData, Tcl_Interp *interp,
-		int objc, Tcl_Obj *CONST objv[])
+		int objc, Tcl_Obj *const objv[])
 {
 	int i = 0;
 	char *scmd;
@@ -960,7 +1085,7 @@ static int HpingObjCmd(ClientData clientData, Tcl_Interp *interp,
  * time to improve on this in the future if needed, without to break the API. */
 
 static int BigBasicObjCmd(ClientData clientData, Tcl_Interp *interp,
-		int objc, Tcl_Obj *CONST objv[])
+		int objc, Tcl_Obj *const objv[])
 {
 	Tcl_Obj *result;
 	mpz_t res, t;
@@ -1180,7 +1305,7 @@ int SetMpzFromAny(struct Tcl_Interp* interp, Tcl_Obj *objPtr)
 /* --------------- the actual commands for multipreicision math ------------- */
 
 static int BigBasicObjCmd(ClientData clientData, Tcl_Interp *interp,
-		int objc, Tcl_Obj *CONST objv[])
+		int objc, Tcl_Obj *const objv[])
 {
 	Tcl_Obj *result;
 	mpz_t res;
@@ -1248,7 +1373,7 @@ oom:
 }
 
 static int BigCmpObjCmd(ClientData clientData, Tcl_Interp *interp,
-		int objc, Tcl_Obj *CONST objv[])
+		int objc, Tcl_Obj *const objv[])
 {
 	Tcl_Obj *result;
 	mpz_ptr a, b;
@@ -1301,7 +1426,7 @@ static int BigCmpObjCmd(ClientData clientData, Tcl_Interp *interp,
 }
 
 static int BigRandObjCmd(ClientData clientData, Tcl_Interp *interp,
-		int objc, Tcl_Obj *CONST objv[])
+		int objc, Tcl_Obj *const objv[])
 {
 	Tcl_Obj *result;
 	int len = 1;
@@ -1326,7 +1451,7 @@ static int BigRandObjCmd(ClientData clientData, Tcl_Interp *interp,
 }
 
 static int BigSrandObjCmd(ClientData clientData, Tcl_Interp *interp,
-		int objc, Tcl_Obj *CONST objv[])
+		int objc, Tcl_Obj *const objv[])
 {
 	char *seed;
 	Tcl_Size len;
@@ -1341,7 +1466,7 @@ static int BigSrandObjCmd(ClientData clientData, Tcl_Interp *interp,
 }
 
 static int BigPowObjCmd(ClientData clientData, Tcl_Interp *interp,
-		int objc, Tcl_Obj *CONST objv[])
+		int objc, Tcl_Obj *const objv[])
 {
 	Tcl_Obj *result;
 	int mpzerr;
@@ -1384,9 +1509,15 @@ static int HpingTcl_AppInit(Tcl_Interp *interp)
 		return TCL_ERROR;
 	HpingRecvInit(recv_handlers, HPING_IFACE_MAX);
 	/* Register hping API */
+	/* hping_version keeps the hping3 base version for old scripts,
+	 * styxwire_version is the product version */
 	Tcl_SetVar(interp, "hping_version", RELEASE_VERSION, TCL_GLOBAL_ONLY);
-	Tcl_SetVar(interp, "tcl_prompt1", "puts -nonewline {hping3> }", TCL_GLOBAL_ONLY);
+	Tcl_SetVar(interp, "styxwire_version", STYXWIRE_VERSION, TCL_GLOBAL_ONLY);
+	Tcl_SetVar(interp, "tcl_prompt1", "puts -nonewline {styxwire> }", TCL_GLOBAL_ONLY);
+	/* the same command under both names */
 	Tcl_CreateObjCommand(interp, "hping", HpingObjCmd, (ClientData)NULL,
+			(Tcl_CmdDeleteProc*)NULL);
+	Tcl_CreateObjCommand(interp, "styxwire", HpingObjCmd, (ClientData)NULL,
 			(Tcl_CmdDeleteProc*)NULL);
 	Tcl_CreateObjCommand(interp, "+", BigBasicObjCmd, (ClientData)NULL,
 			(Tcl_CmdDeleteProc*)NULL);
@@ -1416,14 +1547,45 @@ static int HpingTcl_AppInit(Tcl_Interp *interp)
 			(Tcl_CmdDeleteProc*)NULL);
 	Tcl_CreateObjCommand(interp, "**", BigPowObjCmd, (ClientData)NULL,
 			(Tcl_CmdDeleteProc*)NULL);
-	/* Eval the hpingrc, fi any */
-	{
-		char *home = getenv("HOME");
-		if (home) {
-			char rcfile[PATH_MAX];
-			snprintf(rcfile, PATH_MAX, "%s/.hpingrc", home);
-			rcfile[PATH_MAX-1] = '\0';
-			Tcl_EvalFile(interp, rcfile);
+	/* Source the startup file unless it was disabled.
+	 *
+	 * The historical behaviour is to source ~/.hpingrc and swallow any
+	 * error (missing file, or a script error). That makes the scripting
+	 * mode depend on the invoking user's home directory, which the tests
+	 * must not. Two overrides:
+	 *   STYXWIRE_RC=/path   source this file instead (empty = none)
+	 *   STYXWIRE_NORC set   source nothing
+	 * A syntax error in the startup file is now reported on stderr
+	 * instead of being hidden, but is still non-fatal. ~/.styxwirerc is
+	 * preferred over the legacy ~/.hpingrc when both exist. */
+	if (getenv("STYXWIRE_NORC") == NULL) {
+		const char *rc = getenv("STYXWIRE_RC");
+		char rcfile[PATH_MAX];
+
+		if (rc != NULL) {
+			if (rc[0] == '\0')
+				rc = NULL; /* explicitly no startup file */
+		} else {
+			const char *home = getenv("HOME");
+			if (home != NULL) {
+				struct stat st;
+				snprintf(rcfile, sizeof(rcfile), "%s/.styxwirerc", home);
+				rcfile[sizeof(rcfile)-1] = '\0';
+				if (stat(rcfile, &st) != 0) {
+					snprintf(rcfile, sizeof(rcfile), "%s/.hpingrc", home);
+					rcfile[sizeof(rcfile)-1] = '\0';
+				}
+				rc = rcfile;
+			}
+		}
+		if (rc != NULL) {
+			struct stat st;
+			/* only report an error if the file exists but fails */
+			if (stat(rc, &st) == 0 &&
+			    Tcl_EvalFile(interp, rc) != TCL_OK) {
+				fprintf(stderr, "Error in startup file %s: %s\n",
+					rc, Tcl_GetStringResult(interp));
+			}
 			Tcl_ResetResult(interp);
 		}
 	}
@@ -1434,6 +1596,23 @@ void hping_script(int argc, char **argv)
 {
 	Tcl_Main(argc, argv, HpingTcl_AppInit);
 	exit(0);
+}
+
+/* Create an interpreter with the styxwire commands registered, exactly as
+ * the scripting mode does (startup file included, honouring STYXWIRE_RC /
+ * STYXWIRE_NORC). Exposed so the tests can drive the commands without
+ * Tcl_Main; returns NULL on failure. */
+Tcl_Interp *hping_script_interp(void)
+{
+	Tcl_Interp *interp = Tcl_CreateInterp();
+
+	if (interp == NULL)
+		return NULL;
+	if (HpingTcl_AppInit(interp) != TCL_OK) {
+		Tcl_DeleteInterp(interp);
+		return NULL;
+	}
+	return interp;
 }
 
 #endif /* USE_TCL */
