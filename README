@@ -38,6 +38,8 @@ BUILDING AND TESTING
 	$ ./configure          (./configure --help lists the options)
 	$ make
 	$ make check           offline test-suite: no root, no traffic
+	$ make check-live      live send/receive over a veth pair, no root
+	                       needed (Linux user namespaces); docs/LIVE-TESTS.txt
 	# make install         or: make install DESTDIR=/some/stage
 
 	$ make bench           offline benchmark of the packet engine

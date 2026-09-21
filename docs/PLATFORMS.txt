@@ -15,9 +15,11 @@ OPERATING SYSTEMS
 
   Platform            compiles  unit-tested  live-tested  notes
   ------------------  --------  -----------  -----------  ------------------
-  Linux (x86-64)      yes       yes          no           the tree's
+  Linux (x86-64)      yes       yes          yes (veth)   the tree's
                                                           development and CI
-                                                          platform
+                                                          platform; live
+                                                          over a veth pair,
+                                                          see below
   FreeBSD / OpenBSD   not tried not tried    not tried    BPF paths are in
   NetBSD                                                  the source but
                                                           unverified
@@ -29,10 +31,25 @@ The Linux column was produced with:
     GCC 16.2.1 and clang 22.1.8, libpcap 1.10.6, Tcl 8.6.16 and Tcl 9.0.1
     Linux 7.2 x86-64, as an ordinary user (uid != 0)
 
-"live-tested: no" on Linux is deliberate: the offline suite must run
-without root and without putting traffic on a network, so sending and
-receiving on a real interface is not covered by it. That verification is
-still outstanding for every platform.
+The Linux "live-tested" column reads "yes (veth)", not a bare "yes", and
+the distinction is the point. The offline suite ("make check") must run
+without root and without putting traffic on a network, so it cannot cover
+sending and receiving. A separate, opt-in target does:
+
+    make check-live        (Linux, unprivileged user namespaces)
+
+It runs tests/netns.sh, which builds a veth pair inside a private
+user+network namespace -- uid 0 without real root, an isolated network
+with no physical NIC, nothing leaving the host -- and drives the whole
+live round trip: ICMP echo, TCP SYN to an open and a closed port, --scan
+and a spoofed source, each asserting the reply styxwire captured and the
+RTT it computed. See docs/LIVE-TESTS.txt.
+
+What that covers and what it does not: a veth link is Ethernet
+(DLT_EN10MB) and the path is IPv4. So the EN10MB send/receive/scan path
+is live-tested; a physical NIC, the non-Ethernet link types below, and
+the IPv6 send path (which is refused by decision, docs/IPV6.txt) are
+still not.
 
 LINK-LAYER TYPES (DLT)
 
@@ -42,8 +59,10 @@ never assumes Ethernet. The mapping is getlhs.c:dltype_to_lhs().
 
   DLT                  bytes  status         checked by
   -------------------  -----  -------------  --------------------------
-  DLT_EN10MB              14  fixture        tests/linklayer.sh,
-                                             tests/test_waitpacket.c
+  DLT_EN10MB              14  fixture+live   tests/linklayer.sh,
+                                             tests/test_waitpacket.c;
+                                             live over veth in
+                                             tests/netns.sh
   DLT_RAW                  0  fixture        same
   DLT_NULL                 4  fixture        same (BSD loopback, host
                                              byte order AF)
@@ -71,7 +90,9 @@ never assumes Ethernet. The mapping is getlhs.c:dltype_to_lhs().
 known IPv4/TCP datagram is read back and the reply must be dissected
 with the right field values: a wrong offset makes the test fail.
 "from the spec" means the size comes from the format definition and was
-never run against a real capture of that type.
+never run against a real capture of that type. "fixture+live" adds that
+the type was also exercised end to end on a real (veth) interface by
+tests/netns.sh, not only read from a savefile.
 
 UNSUPPORTED IS A DECISION, NOT AN OVERSIGHT
 

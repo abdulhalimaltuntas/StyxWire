@@ -126,6 +126,23 @@ check: $(PROG) $(TEST_BINS) $(TEST_BINS_TCL) tests/bench
 	@sh tests/run.sh $(TEST_BINS) $(TEST_BINS_TCL)
 
 # ---------------------------------------------------------------------------
+# live send/receive verification (opt-in, NOT part of "make check").
+# This is the one test that opens a raw socket and puts real packets on an
+# interface, so it is kept out of the default suite -- "make check" must run
+# without root and without network traffic. It needs no real root and no
+# physical NIC either: on Linux with unprivileged user namespaces it gets
+# uid 0 inside a private, isolated network namespace, sends over a veth pair
+# and nothing leaves the host. Where that is unavailable it skips (77).
+# ---------------------------------------------------------------------------
+check-live: $(PROG)
+	@sh tests/netns.sh; rc=$$?; \
+	if [ $$rc -eq 77 ]; then \
+		echo "make: check-live skipped (see the SKIP line above)"; \
+		exit 0; \
+	fi; \
+	exit $$rc
+
+# ---------------------------------------------------------------------------
 # benchmarking (offline, no root, no traffic).
 #   make bench                     build and run with the defaults
 #   make bench BENCHFLAGS="-n 50000 -r 9"
@@ -222,6 +239,6 @@ strip: $(PROG)
 	strip $(PROG)
 	@ls -l ./$(PROG)
 
-.PHONY: all dep check fuzz bench clean distclean install uninstall strip
+.PHONY: all dep check check-live fuzz bench clean distclean install uninstall strip
 
 -include .depend

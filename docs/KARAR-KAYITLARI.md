@@ -271,3 +271,37 @@ sabitlenmeden koşturulduğunda `build4` art arda 1229 ns/op ve 2988 ns/op
 
 **Geri alma koşulu.** Profil çıkarılıp bir darboğaz kanıtlanırsa optimizasyon
 yapılır; öncesi/sonrası aynı makinede bu araçla gösterilir.
+
+## KK-14 — Canlı gönderim/alım doğrulaması: kullanıcı ad alanı, gerçek root değil (Aşama 5 sonrası)
+
+**Bağlam.** Beş aşama boyunca en büyük boşluk şuydu: hiçbir test gerçek bir
+soketten paket gönderip yanıtı yakalamıyordu. `make check` sözleşmesi bunu
+yasaklar (root yok, ağ trafiği yok), o yüzden bu doğrulama her platformda
+açık kalmıştı (`docs/PLATFORMS.txt` "live-tested: no").
+
+**Karar.** Ayrı, isteğe bağlı bir hedef eklendi: `make check-live`
+(`tests/netns.sh`). Linux'ta ayrıcalıksız kullanıcı ad alanı (user
+namespace) içeride uid 0 verir; onun içinde tümüyle sahip olunan boş bir ağ
+ad alanı açılır, bir veth çifti kurulur, bir ucu ikinci bir ağ ad alanına
+taşınır ve gerçek raw soket üzerinden gönderim/alım yapılır. Gerçek `sudo`,
+setuid ya da fiziksel arayüz gerekmez; hiçbir paket ana makineden çıkmaz.
+Test ICMP echo, açık/kapalı porta TCP SYN, `--scan` ve sahte kaynak (`-a`)
+senaryolarını sürer; her biri yakalanan yanıtı, hesaplanan RTT'yi ve çıkış
+kodu sözleşmesini (statistics.c:hping_exit_code — yanıt geldiyse 0, hiç
+gelmediyse 1) doğrular.
+
+**Neden `make check`'e konmadı.** `tests/netns.sh` sanal da olsa bir
+arayüze gerçek paket koyar ve raw soket açar. Varsayılan suite'in "root yok,
+trafik yok" sözleşmesini korumak için ayrı tutuldu. Ayrıcalıksız kullanıcı
+ad alanı kapalıysa, Linux dışıysa veya `ip`/`nsenter`/`python3` yoksa test
+başarısız olmak yerine 77 ile atlanır — koşmadığı hâlde koştuğunu iddia
+etmez.
+
+**Kapsam (dürüstlük notu).** veth bir Ethernet bağıdır (DLT_EN10MB) ve yol
+IPv4'tür. Yani EN10MB gönderim/alım/scan yolu artık canlı doğrulanmıştır;
+fiziksel NIC, diğer link-layer türleri ve IPv6 gönderim yolu (kararla
+reddedilir, KK-11) hâlâ canlı test edilmemiştir. `docs/PLATFORMS.txt` Linux
+satırı bu yüzden düz "yes" değil "yes (veth)" der.
+
+**Geri alma koşulu.** Yok; bu yalnızca doğrulama altyapısı ekler, çalışma
+zamanı davranışını değiştirmez.

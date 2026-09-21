@@ -1,0 +1,77 @@
+StyxWire live send/receive verification
+=======================================
+
+Everything in "make check" is offline by contract: no root, no raw
+socket, no packet on any interface. That is the right default -- a test
+suite you can run anywhere, in any CI, without privileges -- but it
+leaves one thing unproven, and it is the most important thing StyxWire
+does: that a packet actually leaves on a raw socket, the far end
+answers, libpcap hands the reply back, StyxWire matches it and computes
+an RTT.
+
+"make check-live" proves exactly that, and it needs neither real root
+nor a physical network.
+
+    make check-live
+
+RUNNING IT WITHOUT ROOT AND WITHOUT A NETWORK
+
+On Linux, an unprivileged user namespace gives you uid 0 inside it, and
+inside that a fresh, empty network namespace that you fully own. So the
+test can:
+
+    - become root only inside its own namespace (no sudo, no setuid);
+    - create a veth pair -- a virtual Ethernet cable with two ends;
+    - keep one end here and move the other into a second network
+      namespace, give each end an address, and bring them up;
+    - open a raw socket, send, and capture the reply.
+
+Nothing touches a real interface and nothing leaves the host. The kernel
+on the far end of the veth is a real TCP/IP stack, so the replies are
+real: a SYN to a listening port comes back SYN+ACK, a SYN to a closed
+port comes back RST+ACK, an ICMP echo comes back an echo reply. This is
+a genuine round trip, not a fixture played back from a file.
+
+The one setup dependency is that unprivileged user namespaces are
+enabled (kernel.unprivileged_userns_clone=1 on kernels that gate it,
+user.max_user_namespaces > 0). Where they are not, or on a non-Linux
+host, or without ip/nsenter/python3, the test skips with status 77
+rather than failing -- it never pretends to have run.
+
+WHAT IT CHECKS (tests/netns.sh)
+
+    icmp     -1 -c 2: two echo replies, 0% loss, an RTT, exit 0
+    tcp      -S -p 81 (closed): RST+ACK (flags RA), exit 0 -- a RST is
+             still a reply, so the exit status is success
+    tcp      -S -p 9999 (a real listener in the peer): SYN+ACK (flags SA)
+    scan     --scan 79-82,9999: 9999 reported open, the rest silent
+    json     --json: three reply events plus a statistics event whose
+             sent/received/loss_percent agree and are not null
+    spoof    -a 10.99.0.55: the packet is still transmitted, but no reply
+             can reach the forged source, so received stays 0, loss is
+             100% and the exit status is 1
+
+The exit-status contract (statistics.c:hping_exit_code) is part of the
+test: 0 when at least one reply was received, 1 when none, so the ICMP
+and TCP cases assert 0 and the spoofed case asserts 1.
+
+WHAT IT DOES NOT COVER
+
+    - A physical NIC. A veth link is Ethernet (DLT_EN10MB); the other
+      link-layer types in docs/PLATFORMS.txt are still savefile-only.
+    - IPv6 sending. It is refused by decision (docs/IPV6.txt, KK-11);
+      building and dissecting IPv6 are covered offline instead.
+    - Other platforms. BSD/macOS BPF paths are in the source but have
+      not been run (docs/PLATFORMS.txt).
+
+DEBUGGING A FAILURE
+
+Run the script directly to see which check failed:
+
+    sh tests/netns.sh
+
+To watch the wire, put a capture on the peer end from a third namespace
+shell, or add a "tcpdump -i v0 -n" before the styxwire call while
+developing. Every styxwire invocation in the script is wrapped in
+"timeout" so a hung capture fails the test instead of stalling the
+build.

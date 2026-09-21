@@ -72,6 +72,11 @@ make targets
 
   make                 build ./styxwire
   make check           build and run the test-suite (tests/)
+  make check-live      live send/receive over a veth pair inside a private
+                       user+network namespace; no real root, no physical
+                       NIC, nothing leaves the host (Linux; skips where
+                       unprivileged user namespaces are off). Not part of
+                       "make check". See docs/LIVE-TESTS.txt
   make WERROR=1        treat compiler warnings as errors (CI does this)
   make SANITIZE=1 ...  build with ASan/UBSan; combine with check, e.g.
                        make clean && make check SANITIZE=1
@@ -116,8 +121,12 @@ Test-suite
   savefiles written by the tests themselves, and the event loop is driven
   by a fake clock.
 
-  The historical scripts in lib/regtest send real packets and are not
-  part of "make check".
+  The one test that does open a raw socket and send is "make check-live"
+  (tests/netns.sh); it is deliberately separate from "make check" and
+  runs the whole live round trip over a veth pair inside a private
+  user+network namespace -- no real root, no physical NIC. See
+  docs/LIVE-TESTS.txt. The historical scripts in lib/regtest also send
+  real packets and are likewise not part of "make check".
 
   make fuzz builds three libFuzzer drivers (clang): fuzz_split (the packet
   dissector), fuzz_apd (the APD parser) and fuzz_opts (the command line
