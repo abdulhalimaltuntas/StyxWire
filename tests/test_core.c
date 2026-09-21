@@ -997,6 +997,173 @@ static void test_ipv6_vectors(void)
 	}
 }
 
+/* ------------------------------------------------------------------ */
+/* send_tcp() wire-format characterization                             */
+/* ------------------------------------------------------------------ */
+/* These pin the exact bytes send_tcp() (sendtcp.c) hands to
+ * send_ip_handler(), captured here by the stub_send.c double. They exist
+ * for two reasons:
+ *
+ *   1. so the planned migration of the CLI TCP send path onto the ARS
+ *      packet engine (KK-5 / work package B4) can be proven byte-for-byte
+ *      identical -- change send_tcp() and these must still pass unchanged;
+ *   2. so the deliberately-malformed capabilities (--badcksum corrupts the
+ *      checksum, -O/--tcpoff forges the data offset) keep working, which
+ *      the ARS checksum path does NOT do on its own (ars_cksum ignores
+ *      opt_badcksum; only cksum.c honours it).
+ *
+ * send_tcp() builds the TCP segment only; the IP header is prepended later
+ * by send_ip(), so the captured buffer starts at the TCP header. The
+ * checksum is verified against an independent pseudo-header computation
+ * (tu_l4_cksum), never against send_tcp()'s own arithmetic. */
+
+/* deterministic 32-bit source: call n returns 0x11111111 * n, i.e.
+ * 0x11111111, 0x22222222, 0x33333333, ... -- one nibble-uniform word per
+ * call, so which draw landed in which field is obvious in the bytes. */
+static unsigned int step_rand(void *arg)
+{
+	unsigned int *n = arg;
+	return 0x11111111u * (++(*n));
+}
+
+static void tcp_vec_setup(void)
+{
+	hping_config_init(&cfg);
+	hping_context_init(&ctx);
+	hping_stats_init(&stats);
+	stub_send_reset();
+	ctx.local.sin_addr.s_addr  = htonl(SADDR);
+	ctx.remote.sin_addr.s_addr = htonl(DADDR);
+	ctx.src_port  = 1234;
+	cfg.initsport = 1234;
+	cfg.dst_port  = 80;
+	cfg.tcp_th_flags = TH_SYN;
+	cfg.src_winsize  = 512;
+	cfg.opt_quiet = TRUE;
+}
+
+static void test_send_tcp_vectors(void)
+{
+	unsigned char *p = stub_last_packet;
+	unsigned char seg[64];
+	unsigned short ref, got;
+	unsigned int draws;
+
+	/* 1. plain SYN, explicit seq/ack, no data, no options */
+	TEST("send_tcp: SYN, explicit seq/ack, no options");
+	tcp_vec_setup();
+	cfg.set_seqnum = 1; cfg.tcp_seqnum = 0x01020304;
+	cfg.set_ack    = 1; cfg.tcp_ack    = 0x0a0b0c0d;
+	CHECK_EQ_INT(send_tcp(), 0);
+	CHECK_EQ_INT(stub_last_size, 20);
+	CHECK_EQ_INT((p[0] << 8) | p[1], 1234);		/* sport */
+	CHECK_EQ_INT((p[2] << 8) | p[3], 80);		/* dport */
+	CHECK_EQ_INT(p[4], 0x01); CHECK_EQ_INT(p[5], 0x02);	/* seq */
+	CHECK_EQ_INT(p[6], 0x03); CHECK_EQ_INT(p[7], 0x04);
+	CHECK_EQ_INT(p[8], 0x0a); CHECK_EQ_INT(p[9], 0x0b);	/* ack */
+	CHECK_EQ_INT(p[10], 0x0c); CHECK_EQ_INT(p[11], 0x0d);
+	CHECK_EQ_INT(p[12] >> 4, 5);			/* data offset */
+	CHECK_EQ_INT(p[12] & 0x0f, 0);			/* reserved (th_x2) */
+	CHECK_EQ_INT(p[13], TH_SYN);
+	CHECK_EQ_INT((p[14] << 8) | p[15], 512);	/* window */
+	CHECK_EQ_INT((p[18] << 8) | p[19], 0);		/* urgent pointer */
+	memcpy(seg, p, 20); seg[16] = seg[17] = 0;
+	memcpy(&got, p + 16, 2);
+	CHECK_EQ_INT(got, tu_l4_cksum(SADDR, DADDR, 6, seg, 20));
+	/* side effects: sequence advanced, source port stepped */
+	CHECK_EQ_INT(ctx.sequence, 1);
+	CHECK_EQ_INT(ctx.src_port, (1 + 1234) % 65536);
+
+	/* 2. random seq/ack come from the injected source, in order */
+	TEST("send_tcp: random seq/ack from the injected source");
+	tcp_vec_setup();
+	draws = 0;
+	hping_random_set(step_rand, &draws);
+	CHECK_EQ_INT(send_tcp(), 0);
+	CHECK_EQ_INT(stub_last_size, 20);
+	CHECK_EQ_INT(p[4], 0x11); CHECK_EQ_INT(p[7], 0x11);	/* seq = draw 1 */
+	CHECK_EQ_INT(p[8], 0x22); CHECK_EQ_INT(p[11], 0x22);	/* ack = draw 2 */
+	CHECK_EQ_INT(draws, 2);				/* exactly two draws */
+	memcpy(seg, p, 20); seg[16] = seg[17] = 0;
+	memcpy(&got, p + 16, 2);
+	CHECK_EQ_INT(got, tu_l4_cksum(SADDR, DADDR, 6, seg, 20));
+	hping_random_set(NULL, NULL);
+
+	/* 3. TCP timestamp option: two NOPs, then kind 8 / len 10, a random
+	 *    tsval and a zero tsecr; data offset grows to 8 words. */
+	TEST("send_tcp: --tcp-timestamp option layout");
+	tcp_vec_setup();
+	draws = 0;
+	hping_random_set(step_rand, &draws);
+	cfg.opt_tcp_timestamp = TRUE;
+	CHECK_EQ_INT(send_tcp(), 0);
+	CHECK_EQ_INT(stub_last_size, 32);		/* 20 + 12 option bytes */
+	CHECK_EQ_INT(p[12] >> 4, 8);			/* (20 + 12) / 4 */
+	CHECK_EQ_INT(p[20], 1); CHECK_EQ_INT(p[21], 1);	/* NOP, NOP */
+	CHECK_EQ_INT(p[22], 8); CHECK_EQ_INT(p[23], 10);	/* kind, len */
+	CHECK_EQ_INT(p[24], 0x33); CHECK_EQ_INT(p[27], 0x33);	/* tsval = draw 3 */
+	CHECK_EQ_INT(p[28], 0); CHECK_EQ_INT(p[31], 0);	/* tsecr = 0 */
+	CHECK_EQ_INT(draws, 3);				/* seq, ack, tsval */
+	memcpy(seg, p, 32); seg[16] = seg[17] = 0;
+	memcpy(&got, p + 16, 2);
+	CHECK_EQ_INT(got, tu_l4_cksum(SADDR, DADDR, 6, seg, 32));
+	hping_random_set(NULL, NULL);
+
+	/* 4. --badcksum: the checksum is the correct one XORed with 0x5555
+	 *    (cksum.c does sum ^= 0x5555 before the final complement, and
+	 *    ~(s ^ 0x5555) == (~s) ^ 0x5555). The capability must survive. */
+	TEST("send_tcp: --badcksum corrupts the checksum deterministically");
+	tcp_vec_setup();
+	cfg.set_seqnum = 1; cfg.tcp_seqnum = 0x01020304;
+	cfg.set_ack    = 1; cfg.tcp_ack    = 0x0a0b0c0d;
+	cfg.opt_badcksum = TRUE;
+	CHECK_EQ_INT(send_tcp(), 0);
+	memcpy(seg, p, 20); seg[16] = seg[17] = 0;
+	ref = tu_l4_cksum(SADDR, DADDR, 6, seg, 20);
+	memcpy(&got, p + 16, 2);
+	CHECK_EQ_INT(got, (unsigned short) (ref ^ 0x5555));
+	CHECK(got != ref);				/* it really is wrong */
+
+	/* 5. -O/--tcpoff: the data offset is forged and the checksum still
+	 *    covers the forged header (a valid sum over a lying field). */
+	TEST("send_tcp: -O/--tcpoff forges the data offset");
+	tcp_vec_setup();
+	cfg.set_seqnum = 1; cfg.tcp_seqnum = 0x01020304;
+	cfg.set_ack    = 1; cfg.tcp_ack    = 0x0a0b0c0d;
+	cfg.src_thoff  = 15;				/* bogus: no such options */
+	CHECK_EQ_INT(send_tcp(), 0);
+	CHECK_EQ_INT(stub_last_size, 20);
+	CHECK_EQ_INT(p[12] >> 4, 15);
+	memcpy(seg, p, 20); seg[16] = seg[17] = 0;
+	memcpy(&got, p + 16, 2);
+	CHECK_EQ_INT(got, tu_l4_cksum(SADDR, DADDR, 6, seg, 20));
+
+	/* 6. payload: data_handler() fills cfg.data_size bytes with 'X'. */
+	TEST("send_tcp: data payload");
+	tcp_vec_setup();
+	cfg.set_seqnum = 1; cfg.tcp_seqnum = 0x01020304;
+	cfg.set_ack    = 1; cfg.tcp_ack    = 0x0a0b0c0d;
+	cfg.data_size  = 4;
+	CHECK_EQ_INT(send_tcp(), 0);
+	CHECK_EQ_INT(stub_last_size, 24);
+	CHECK_EQ_INT(p[20], 'X'); CHECK_EQ_INT(p[23], 'X');
+	memcpy(seg, p, 24); seg[16] = seg[17] = 0;
+	memcpy(&got, p + 16, 2);
+	CHECK_EQ_INT(got, tu_l4_cksum(SADDR, DADDR, 6, seg, 24));
+
+	/* 7. side effects: --keep-still freezes the source port, and
+	 *    --force-incdport steps the destination port. */
+	TEST("send_tcp: --keep-still and --force-incdport side effects");
+	tcp_vec_setup();
+	cfg.set_seqnum = 1; cfg.tcp_seqnum = 0;
+	cfg.set_ack    = 1; cfg.tcp_ack    = 0;
+	cfg.opt_keepstill    = TRUE;
+	cfg.opt_force_incdport = TRUE;
+	CHECK_EQ_INT(send_tcp(), 0);
+	CHECK_EQ_INT(ctx.src_port, 1234);		/* frozen */
+	CHECK_EQ_INT(cfg.dst_port, 81);			/* stepped */
+}
+
 int main(void)
 {
 	hping_config_init(&cfg);
@@ -1009,6 +1176,7 @@ int main(void)
 	test_cksum();
 	test_rand_dest();
 	test_apd_build_vectors();
+	test_send_tcp_vectors();
 	test_split_roundtrip();
 	test_split_malformed();
 	test_display_ipopt();

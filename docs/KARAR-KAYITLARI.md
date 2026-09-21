@@ -305,3 +305,47 @@ satırı bu yüzden düz "yes" değil "yes (veth)" der.
 
 **Geri alma koşulu.** Yok; bu yalnızca doğrulama altyapısı ekler, çalışma
 zamanı davranışını değiştirmez.
+
+## KK-15 — CLI TCP gönderim yolu ARS'ye taşındı (B4, TCP ilk adım)
+
+**Bağlam.** KK-5, `sendtcp.c/sendudp.c/sendicmp.c/sendip.c` ile ARS
+motorunun aynı protokol işini iki kez yaptığını saptamış ve birleştirmeyi
+"küçük adımlarla, `sendtcp.c` ile başlayarak, bayt-eşit vektörlerle"
+ertelemişti. Bu iş paketi (B4) o ilk adımı atar.
+
+**Karar.** `send_tcp()` artık TCP segmentini elle bayt dizerek değil, ARS
+ile kurar (`ars_add_iphdr`/`ars_add_tcphdr`/`ars_add_tcpopt`/`ars_add_data`
+→ `ars_compile` → `ars_build_packet`); IP başlığı yine sonra `send_ip()`
+tarafından eklenir, ARS'nin IP katmanı yalnızca pseudo-header checksum'u
+için adresleri sağlar ve atılır. Böylece TCP başlığı ve checksum'ının tek
+bir uygulaması kalır.
+
+**Kasıtlı hatalı paket yetenekleri korundu (prompt ilke 3).** ARS
+varsayılanları bunları tek başına üretmez, elle yeniden uygulanır:
+- `--badcksum`: ARS doğru checksum'ı hesaplar; `cksum.c` onu
+  `~(s ^ 0x5555) == (~s) ^ 0x5555` ile bozar, bu yüzden sonuç 0x5555 ile
+  XOR'lanır. (`ars_cksum` `opt_badcksum`'ı bilmez — yalnızca `cksum.c` bilir.)
+- `-O/--tcpoff`: data offset elle sahte değere yazılır ve `ARS_TAKE_TCP_HDRLEN`
+  ile ARS'nin yeniden hesaplaması engellenir.
+- Solaris checksum bug (`STUPID_SOLARIS_CHECKSUM_BUG`): checksum alanına
+  segment uzunluğu yazılır.
+- TCP timestamp seçeneği: tarihsel bayt sırası (NOP, NOP, kind 8/len 10,
+  rastgele tsval, sıfır tsecr) `ars_add_tcpopt(NOP)` ×2 + `TIMESTAMP` ile
+  aynen üretilir (ARS dolgu NOP'larını sona koyar; burada 12 bayt zaten
+  4'e hizalı olduğundan ek dolgu olmaz).
+
+**Kabul kanıtı.** Önce mevcut `send_tcp()` çıktısı bayt bayt sabitlendi
+(`tests/test_core.c:test_send_tcp_vectors`, 7 senaryo/56 kontrol: açık ve
+rastgele seq/ack, timestamp, --badcksum, -O, veri, keepstill/force-incdport
+yan etkileri; checksum bağımsız pseudo-header ile doğrulanır). Bu ağ testi
+eski kodda geçti; ARS'ye geçişten sonra **değişmeden** geçti (474/474).
+Ayırt edicilik: badcksum XOR'u kaldırılınca iki kontrol düştü. Canlı yol
+(`make check-live`, gerçek TCP veth üzerinden) 17/17; ASan/UBSan/LSan temiz
+(paket başına malloc/free sızdırmıyor).
+
+**Kalan iş.** UDP (`sendudp.c`) ve ICMP (`sendicmp.c`) hâlâ elle kuruyor;
+aynı desenle (karakterizasyon vektörü → ARS → bayt-eşitlik) taşınacak.
+IPv6 gönderimi kararla reddedilir (KK-11), bu birleştirmenin konusu değil.
+
+**Geri alma koşulu.** Yok; davranış bayt düzeyinde korundu. Bir regresyon
+çıkarsa karakterizasyon vektörü yakalar.
