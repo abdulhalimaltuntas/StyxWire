@@ -232,6 +232,17 @@ long long hping_send_interval_us(void)
 static int resolve_or_fail(struct sockaddr_in *sa, char *name)
 {
 	if (resolve_addr((struct sockaddr*) sa, name) == -1) {
+		/* Tell IPv6 apart from an ordinary resolution failure: the
+		 * packet path is IPv4 only for now, but the engine can
+		 * build and dissect IPv6 offline (docs/IPV6.txt). */
+		if (resolve_is_ipv6_only(name)) {
+			fprintf(stderr,
+			  "'%s' is an IPv6 address: styxwire's command line sends IPv4 only.\n"
+			  "IPv6 packets can be built and dissected offline, for example:\n"
+			  "  styxwire exec (then: styxwire build {ip6(daddr=%s)+icmp6(type=128)})\n",
+			  name, name);
+			return -1;
+		}
 		fprintf(stderr, "Unable to resolve '%s'\n", name);
 		return -1;
 	}

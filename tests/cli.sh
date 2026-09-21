@@ -190,6 +190,29 @@ PY
 	# a missing file is a clean error, exit 1
 	$H --read /no/such/file.pcap -a 10.0.0.1 10.0.0.2 >/dev/null 2>&1
 	check "$?" 1 "--read of a missing file fails"
+
+	# the receive path is IPv4 only: an IPv6 frame is skipped, and the
+	# skip is announced once instead of happening in silence
+	python3 - "$pcap" <<'PY'
+import struct,sys,socket
+def ck(b):
+    if len(b)%2: b+=b'\x00'
+    s=sum(struct.unpack('!%dH'%(len(b)//2),b))
+    while s>>16: s=(s&0xffff)+(s>>16)
+    return (~s)&0xffff
+sa=socket.inet_pton(socket.AF_INET6,'2001:db8::2')
+da=socket.inet_pton(socket.AF_INET6,'2001:db8::1')
+tcp=bytearray(20); tcp[0:2]=struct.pack('!H',80); tcp[2:4]=struct.pack('!H',5000)
+tcp[12]=0x50; tcp[13]=0x12; tcp[14:16]=struct.pack('!H',512)
+tcp[16:18]=struct.pack('!H',ck(sa+da+struct.pack('!I',20)+b'\x00\x00\x00\x06'+bytes(tcp)))
+pkt=struct.pack('!IHBB',0x60000000,20,6,64)+sa+da+bytes(tcp)
+with open(sys.argv[1],'wb') as f:
+    f.write(struct.pack('!IHHiIII',0xa1b2c3d4,2,4,0,0,65535,101))
+    f.write(struct.pack('!IIII',0,0,len(pkt),len(pkt))); f.write(pkt)
+PY
+	rout=`$H --read "$pcap" --json -S -p 80 -a 10.0.0.1 10.0.0.2 2>/dev/null`
+	check "`printf '%s\n' "$rout" | grep -c '"type":"reply"'`" 0 "--read skips IPv6 frames"
+	check "`$H --read "$pcap" -S -p 80 -a 10.0.0.1 10.0.0.2 2>&1 >/dev/null | grep -c 'IPv4 only'`" 1 "--read warns once about skipped IPv6"
 	rm -f "$pcap"
 fi
 

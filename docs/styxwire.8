@@ -727,7 +727,43 @@ The only difference is the description of the error, it starts with
 TTL 0.
 
 .SH AUTHOR
-Salvatore Sanfilippo <antirez@invece.org>, with the help of the people mentioned in AUTHORS file and at http://www.styxwire.org/authors.html
+Salvatore Sanfilippo <antirez@invece.org>, with the help of the people mentioned in the AUTHORS file (the historical list was at http://www.hping.org/authors.html)
+.SH IPV6
+The command line sends and receives
+.B IPv4
+only. Given an IPv6 target, styxwire prints a diagnostic saying so, with
+an offline example, and exits with status 1.
+.PP
+The packet engine does handle IPv6: the APD language (see
+.BR docs/APD.txt )
+has
+.B ip6
+and
+.B icmp6
+layers, TCP and UDP over IPv6 get the RFC 8200 section 8.1 pseudo-header
+checksum, ICMPv6 gets the RFC 4443 checksum (which, unlike ICMPv4,
+covers the pseudo-header), and the dissector picks IPv4 or IPv6 from the
+version nibble. Extension headers are kept as a data layer instead of
+being parsed.
+.PP
+The receive loop, and therefore
+.BR --read ,
+is still IPv4 only: IPv6 datagrams are skipped, with one warning on
+standard error rather than in silence. Building an IPv6 packet and asking to
+send it is refused rather than silently sent as something else. The full
+matrix is in
+.BR docs/IPV6.txt .
+.SH LINK LAYER TYPES
+The offset of the IP header inside a captured frame comes from the
+capture source's own link-layer type, not from an Ethernet assumption.
+Ethernet, raw IP, both loopback encapsulations and Linux cooked capture
+v1 and v2 (what
+.B -i any
+gives on a current Linux) are supported and covered by tests. A type
+whose header length is not fixed (802.11, radiotap, 802.5 token ring) is
+refused by name instead of guessed, because a wrong offset would
+misparse every packet silently. The matrix is in
+.BR docs/PLATFORMS.txt .
 .SH BUGS
 Even using the --end and --safe options to transfer files the final packet
 will be padded with 0x00 bytes.
@@ -744,3 +780,9 @@ a solaris problem, as stated in the tcpdump-workers mailing list,
 so the libpcap can't do nothing to handle it properly.
 .SH SEE ALSO
 ping(8), traceroute(8), ifconfig(8), nmap(1)
+.PP
+In the source distribution:
+.BR docs/APD.txt " (the packet description language),"
+.BR docs/API.txt " (the Tcl API),"
+.BR docs/JSON.txt " (the --json schema),"
+.BR docs/IPV6.txt ", " docs/PLATFORMS.txt " and " docs/BENCHMARK.txt .

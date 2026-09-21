@@ -12,6 +12,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
 
 static int tu_failures = 0;
 static int tu_checks = 0;
@@ -161,6 +163,52 @@ static unsigned short tu_l4_cksum(unsigned long saddr, unsigned long daddr,
 	tu_put16(buf+10, len);
 	memcpy(buf+12, seg, len);
 	ck = tu_cksum(buf, 12 + len);
+	free(buf);
+	return ck;
+}
+
+/* ---- IPv6 helpers (independent of the ARS code under test) ---- */
+
+/* Parse an IPv6 literal into 16 bytes; returns 0 on success. */
+static int tu_pton6(const char *s, unsigned char out[16]) __attribute__((unused));
+static int tu_pton6(const char *s, unsigned char out[16])
+{
+	return inet_pton(AF_INET6, s, out) == 1 ? 0 : -1;
+}
+
+/* Build a 40 byte IPv6 header at 'p' (RFC 8200). Returns 40. */
+static int tu_build_ip6(unsigned char *, int, int, int, int, const char *, const char *) __attribute__((unused));
+static int tu_build_ip6(unsigned char *p, int tclass, int flow, int payload_len,
+			int nexthdr, const char *src, const char *dst)
+{
+	memset(p, 0, 40);
+	tu_put32(p, ((unsigned long)6 << 28) |
+		    (((unsigned long) tclass & 0xff) << 20) |
+		    ((unsigned long) flow & 0xfffff));
+	tu_put16(p+4, payload_len);
+	p[6] = nexthdr;
+	p[7] = 64;			/* hop limit */
+	tu_pton6(src, p+8);
+	tu_pton6(dst, p+24);
+	return 40;
+}
+
+/* RFC 8200 section 8.1 upper-layer checksum over 'seg' (whose checksum
+ * field must be zero), in memory order like tu_cksum(). */
+static unsigned short tu_l4_cksum6(const char *, const char *, int, const unsigned char *, int) __attribute__((unused));
+static unsigned short tu_l4_cksum6(const char *src, const char *dst, int nexthdr,
+				   const unsigned char *seg, int len)
+{
+	unsigned char *buf = malloc(40 + len);
+	unsigned short ck;
+
+	tu_pton6(src, buf);
+	tu_pton6(dst, buf + 16);
+	tu_put32(buf + 32, (unsigned long) len);
+	buf[36] = buf[37] = buf[38] = 0;
+	buf[39] = nexthdr;
+	memcpy(buf + 40, seg, len);
+	ck = tu_cksum(buf, 40 + len);
 	free(buf);
 	return ck;
 }

@@ -8,6 +8,8 @@
 #include <netinet/in.h>
 #include <ctype.h>
 
+#include <arpa/inet.h>
+
 #include "ars.h"
 
 void trimlastchar(char *s)
@@ -86,6 +88,56 @@ int ars_rapd_ip(struct adbuf *dest, struct ars_packet *pkt, int layer)
 		adbuf_printf(dest, "daddr=%u.%u.%u.%u",
 				x[0], x[1], x[2], x[3]);
 	}
+	adbuf_printf(dest, ")+");
+	return -ARS_OK;
+}
+
+/* IPv6 header -> APD. The addresses are printed with inet_ntop, so the
+ * canonical RFC 5952 form is used; the description parses back into the
+ * same bytes. */
+int ars_rapd_ip6(struct adbuf *dest, struct ars_packet *pkt, int layer)
+{
+	struct ars_ip6hdr ip6;
+	char abuf[ARS_INET6_ADDRSTRLEN];
+	int len = pkt->p_layer[layer].l_size;
+
+	memset(&ip6, 0, sizeof(ip6));
+	memcpy(&ip6, pkt->p_layer[layer].l_data, MIN((size_t)len, sizeof(ip6)));
+
+	adbuf_printf(dest, "ip6(");
+	adbuf_printf(dest, "ver=%u,", (unsigned) ARS_IP6_VERSION(&ip6));
+	adbuf_printf(dest, "tclass=0x%02x,", (unsigned) ARS_IP6_TCLASS(&ip6));
+	adbuf_printf(dest, "flow=%lu,", (unsigned long) ARS_IP6_FLOW(&ip6));
+	adbuf_printf(dest, "plen=%u,", ntohs(ip6.payload_len));
+	adbuf_printf(dest, "nh=%u,", ip6.nexthdr);
+	adbuf_printf(dest, "hlim=%u,", ip6.hoplimit);
+	if (inet_ntop(AF_INET6, ip6.saddr, abuf, sizeof(abuf)) == NULL)
+		strlcpy(abuf, "::", sizeof(abuf));
+	adbuf_printf(dest, "saddr=%s,", abuf);
+	if (inet_ntop(AF_INET6, ip6.daddr, abuf, sizeof(abuf)) == NULL)
+		strlcpy(abuf, "::", sizeof(abuf));
+	adbuf_printf(dest, "daddr=%s", abuf);
+	adbuf_printf(dest, ")+");
+	return -ARS_OK;
+}
+
+/* ICMPv6 header -> APD (same layout as ICMPv4, different type numbers) */
+int ars_rapd_icmp6(struct adbuf *dest, struct ars_packet *pkt, int layer)
+{
+	struct ars_icmphdr *icmp = pkt->p_layer[layer].l_data;
+
+	adbuf_printf(dest, "icmp6(");
+	adbuf_printf(dest, "type=%u,", icmp->type);
+	adbuf_printf(dest, "code=%u,", icmp->code);
+	adbuf_printf(dest, "cksum=0x%04x,", ntohs(icmp->checksum));
+	if (icmp->type == ARS_ICMP6_ECHO || icmp->type == ARS_ICMP6_ECHOREPLY) {
+		adbuf_printf(dest, "id=%u,", ntohs(icmp->un.echo.id));
+		adbuf_printf(dest, "seq=%u,", ntohs(icmp->un.echo.sequence));
+	} else {
+		adbuf_printf(dest, "unused=%lu,", (unsigned long)
+				ntohl(icmp->un.gateway));
+	}
+	adbuf_rtrim(dest, 1);
 	adbuf_printf(dest, ")+");
 	return -ARS_OK;
 }

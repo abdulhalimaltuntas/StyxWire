@@ -97,6 +97,8 @@ int ars_check_icmp_cksum(struct ars_icmphdr *icmp, size_t size)
 #define ARS_SPLIT_GET_IGRP	7
 #define ARS_SPLIT_GET_IGRPENTRY	8
 #define ARS_SPLIT_GET_DATA	9
+#define ARS_SPLIT_GET_IP6	10
+#define ARS_SPLIT_GET_ICMP6	11
 
 int ars_split_ip(struct ars_packet *pkt, void *packet, size_t size,
 						int *state, int *len);
@@ -130,7 +132,9 @@ int (*ars_split_state_handler[])(struct ars_packet *pkt, void *packet,
 	ars_split_tcpopt,
 	ars_split_igrp,
 	ars_split_igrpentry,
-	ars_split_data
+	ars_split_data,
+	ars_split_ip6,
+	ars_split_icmp6
 };
 
 int ars_split_packet(void *packet, size_t size, int ipoff, struct ars_packet *pkt)
@@ -151,6 +155,12 @@ int ars_split_packet(void *packet, size_t size, int ipoff, struct ars_packet *pk
 	offset += ipoff;
 	size -= ipoff;
 
+	/* The first layer is IPv4 or IPv6 depending on the version nibble
+	 * of the first byte; anything else is dissected as IPv4 so that a
+	 * malformed packet still produces the historical result. */
+	if (size >= 1 && ((p[offset] >> 4) & 0xf) == 6)
+		state = ARS_SPLIT_GET_IP6;
+
 	/* Implemented as a finite state machine:
 	 * every state is handled with a protocol specific function */
 	while (state != ARS_SPLIT_DONE) {
@@ -170,6 +180,13 @@ int ars_split_packet(void *packet, size_t size, int ipoff, struct ars_packet *pk
 			size_t totlen = ntohs(ip->tot_len);
 			if (totlen < (size_t) len)
 				totlen = len;
+			size = MIN(size, totlen);
+		}
+		/* the same for IPv6: the datagram is 40 + payload_len */
+		if (pkt->p_layer_nr == 1 &&
+		    pkt->p_layer[0].l_type == ARS_TYPE_IP6) {
+			struct ars_ip6hdr *ip6 = pkt->p_layer[0].l_data;
+			size_t totlen = (size_t) ntohs(ip6->payload_len) + len;
 			size = MIN(size, totlen);
 		}
 		offset += len;
@@ -204,6 +221,100 @@ void ars_ip_next_state(int ipproto, int *state)
 		*state = ARS_SPLIT_GET_DATA;
 		break;
 	}
+}
+
+/* Select the state for an IPv6 "next header" value. Extension headers are
+ * not dissected in this slice: their bytes are kept as a DATA layer. */
+static void ars_ip6_next_state(int nexthdr, int *state)
+{
+	if (ars_ip6_is_extension(nexthdr)) {
+		*state = ARS_SPLIT_GET_DATA;
+		return;
+	}
+	switch (nexthdr) {
+	case ARS_IPPROTO_ICMPV6:	*state = ARS_SPLIT_GET_ICMP6; break;
+	case ARS_IPPROTO_TCP:		*state = ARS_SPLIT_GET_TCP; break;
+	case ARS_IPPROTO_UDP:		*state = ARS_SPLIT_GET_UDP; break;
+	case ARS_IPPROTO_ICMP:		*state = ARS_SPLIT_GET_ICMP; break;
+	case ARS_IPPROTO_IPV6:		*state = ARS_SPLIT_GET_IP6; break;
+	case ARS_IPPROTO_IPIP:		*state = ARS_SPLIT_GET_IP; break;
+	default:			*state = ARS_SPLIT_GET_DATA; break;
+	}
+}
+
+/* IPv6 header: fixed 40 bytes, no options and no header checksum. */
+int ars_split_ip6(struct ars_packet *pkt, void *packet, size_t size, int *state, int *len)
+{
+	struct ars_ip6hdr ip6, *newip6;
+	int flags = 0;
+	int ip6size = ARS_IP6HDR_SIZE;
+
+	memset(&ip6, 0, sizeof(ip6));
+	memcpy(&ip6, packet, MIN(size, sizeof(ip6)));
+
+	if (size < ARS_IP6HDR_SIZE) {
+		flags |= ARS_SPLIT_FTRUNC;
+		ip6size = size;
+	}
+	if ((newip6 = ars_add_ip6hdr(pkt, 0)) == NULL)
+		return -ARS_NOMEM;
+	memcpy(newip6, packet, ip6size);
+	ars_set_flags(pkt, ARS_LAST_LAYER, flags);
+	*len = ip6size;
+
+	if (flags & ARS_SPLIT_FTRUNC) {
+		*state = ARS_SPLIT_GET_DATA;
+		return -ARS_OK;
+	}
+	ars_ip6_next_state(ip6.nexthdr, state);
+	return -ARS_OK;
+}
+
+/* ICMPv6: the ICMPv4 layout, but the checksum covers the IPv6 pseudo
+ * header, so it can only be verified with the IPv6 header at hand. */
+int ars_split_icmp6(struct ars_packet *pkt, void *packet, size_t size, int *state, int *len)
+{
+	struct ars_icmphdr *newicmp;
+	int flags = 0;
+	int icmpsize = ARS_ICMP6HDR_SIZE;
+
+	if (size < (size_t) icmpsize) {
+		flags |= ARS_SPLIT_FTRUNC;
+		icmpsize = size;
+	} else {
+		/* verify the checksum against the preceding IPv6 header:
+		 * add the layer first (so the pseudo header sees the real
+		 * upper-layer length), then compare and remove it. */
+		int error;
+		u_int16_t stored, computed = 0;
+
+		error = ars_add_generic(pkt, size, ARS_TYPE_ICMP6);
+		if (error != -ARS_OK)
+			return error;
+		newicmp = pkt->p_layer[pkt->p_layer_nr].l_data;
+		memcpy(newicmp, packet, size);
+		stored = newicmp->checksum;
+		newicmp->checksum = 0;
+		error = ars_ip6_pseudo_cksum(pkt, pkt->p_layer_nr,
+					     ARS_IPPROTO_ICMPV6, &computed);
+		if (error != -ARS_OK) {
+			/* no IPv6 header before it: cannot verify */
+			computed = stored;
+		}
+		if (stored != computed)
+			flags |= ARS_SPLIT_FBADCKSUM;
+		error = ars_remove_layer(pkt, pkt->p_layer_nr);
+		if (error != ARS_OK)
+			return error;
+	}
+
+	if ((newicmp = ars_add_icmp6hdr(pkt, 0)) == NULL)
+		return -ARS_NOMEM;
+	memcpy(newicmp, packet, icmpsize);
+	ars_set_flags(pkt, ARS_LAST_LAYER, flags);
+	*len = icmpsize;
+	*state = ARS_SPLIT_GET_DATA;
+	return -ARS_OK;
 }
 
 int ars_split_ip(struct ars_packet *pkt, void *packet, size_t size, int *state, int *len)

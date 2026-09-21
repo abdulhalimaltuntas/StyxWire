@@ -1,0 +1,94 @@
+StyxWire offline benchmark
+==========================
+
+    make bench                         defaults, CPU-pinned if possible
+    make bench BENCHFLAGS="-n 50000 -r 9"
+    tests/bench --list                 what each workload does
+    tests/bench --json                 one JSON object per workload
+    tests/bench --selftest             run by "make check"
+
+The benchmark measures the packet engine only, on in-memory buffers: no
+socket, no capture device, no file, no randomness, no root. It is there
+so that a change can be shown to cost or save something, not to produce
+a number to put in a README.
+
+WHAT IT MEASURES
+
+    build4      APD text -> IPv4/TCP/data wire bytes (parse, compile,
+                checksum, serialise)
+    build6      the same with an IPv6 header
+    split4      IPv4/TCP/data wire bytes -> layers (the dissector)
+    split6      the same with an IPv6 header
+    describe4   wire bytes -> layers -> APD text (the --read path)
+    cksum       the Internet checksum over 1500 bytes
+
+METHOD
+
+Each workload runs "iterations" times per repetition, and the whole
+thing is repeated "repetitions" times after one untimed warm-up. The
+reported ns/op is the minimum over the repetitions, which is the least
+noisy estimate of the cost; the median and the maximum are printed next
+to it so that the spread is visible instead of hidden. The clock is
+CLOCK_MONOTONIC.
+
+Allocations are counted by interposing malloc, calloc, realloc and free
+with the linker's --wrap (-DBENCH_WRAP_MALLOC). realloc is counted as
+one allocation of its new size and one release of the old block, or a
+growing buffer would look like a leak. If your linker has no --wrap,
+build with "make bench BENCH_WRAP=" and the allocation columns read
+"n/a" rather than zero. Peak resident set comes from getrusage(); on
+Linux ru_maxrss is in KiB, on some BSDs it is in bytes.
+
+READ THE HEADER BEFORE THE NUMBERS
+
+Every run prints the machine, the CPU, the compiler, the flags, the
+iteration counts and the CPU affinity, because a number without them
+means nothing. Comparisons are only valid between runs taken the same
+way on the same machine.
+
+Pinning matters more than it looks. On a laptop with performance and
+efficiency cores, the same unpinned binary measured build4 at 1229 ns/op
+and 2988 ns/op in consecutive runs, purely from which core class the
+process landed on -- a factor of 2.4 that has nothing to do with the
+code. "make bench" therefore runs under "taskset -c 0" when taskset is
+available, and the header prints the affinity it actually had, with a
+warning when more than one CPU is allowed.
+
+A REFERENCE RUN
+
+Not a target, not a requirement, and not comparable to your machine:
+this is what the tree measured when the benchmark was added, so that a
+later regression has something to be compared against.
+
+    Linux 7.2 x86-64, 13th Gen Intel Core i5-1334U, GCC 16.2.1,
+    -O2 -Wall -g, taskset -c 0, 50000 iterations x 9 repetitions
+
+    workload        ns/op     median        max         op/s   allocs     bytes
+    build4         1278.0     1326.6     1379.6       782480     5.00     159.0
+    build6         1457.8     1467.9     1501.4       685968     5.00     199.0
+    split4          387.2      392.5      411.0      2582453     4.00     112.0
+    split6          369.2      375.3      392.0      2708244     4.00     132.0
+    describe4      2060.3     2102.4     2226.0       485359     9.00    1306.0
+    cksum            40.0       42.5       62.9     25023998     0.00       0.0
+
+    peak resident set: 3672 KiB
+
+What is worth noticing in it, for whoever optimises next: building a
+packet costs about three times dissecting one, and describing costs
+another dissect on top of the text formatting; the allocation counts are
+small and constant per operation (5 for a build, 4 for a dissect), so
+there is no hidden per-byte allocation; and IPv6 costs slightly more
+than IPv4 for the same work, which is the larger header and the wider
+pseudo-header, not a different code path.
+
+Nothing here has been optimised on the strength of these numbers. A
+change made for speed should come with a before/after pair from this
+tool on one machine, and with the test-suite still green.
+
+SELF-TEST
+
+A benchmark that measures the wrong thing is worse than none, so every
+workload returns a value derived from its result (the built length, the
+layer count, the described length) and "tests/bench --selftest" checks
+them. That is what "make check" runs; it does not time anything and
+takes milliseconds.

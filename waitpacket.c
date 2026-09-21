@@ -108,7 +108,7 @@ void wait_packet(void)
 	}
 
 	/* Check if the packet is shorter than the link header size */
-	if (size < ctx.linkhdr_size) {
+	if (size < 0 || (unsigned int) size < ctx.linkhdr_size) {
 		if (cfg.opt_debug)
 			printf("DEBUG: WARNING: packet size < linkhdr_size\n");
 		return;
@@ -126,6 +126,22 @@ void wait_packet(void)
 	}
 
 	memcpy(&ip, packet+ctx.linkhdr_size, sizeof(ip));
+
+	/* The receive path is IPv4 only (docs/IPV6.txt). An IPv6 datagram
+	 * would otherwise fail the header-length check below and be
+	 * dropped without a word, so say once that it is being skipped:
+	 * silently ignoring traffic the user can see with tcpdump is the
+	 * worst kind of wrong. */
+	if (ip.version == 6) {
+		static int said;
+
+		if (!said) {
+			said = 1;
+			fprintf(stderr, "styxwire: skipping IPv6 datagrams: "
+				"the receive path is IPv4 only (docs/IPV6.txt)\n");
+		}
+		return;
+	}
 	iphdr_size = ip.ihl * 4;
 
 	/* Bad IP header len? (shorter than the fixed header, or longer

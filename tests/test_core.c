@@ -781,6 +781,222 @@ static void test_pcap_recv(void)
 	unlink(path);
 }
 
+/* ------------------------------------------------------------------ */
+/* IPv6: build, dissect, checksums (offline slice)                     */
+/* ------------------------------------------------------------------ */
+
+#define V6SRC "2001:db8::1"
+#define V6DST "2001:db8::2"
+
+static void test_ipv6_vectors(void)
+{
+	unsigned char *pkt;
+	size_t size;
+	const char *d;
+	int layers, flags;
+	unsigned short ck;
+	unsigned char seg[64], buf[128];
+
+	TEST("ipv6: header fields on the wire (RFC 8200 layout)");
+	pkt = build_apd("ip6(saddr=2001:db8::1,daddr=2001:db8::2,tclass=0x20,"
+			"flow=0x12345,hlim=7)+icmp6(type=128,id=7,seq=3)+data(str=hello)", &size);
+	CHECK(pkt != NULL);
+	if (!pkt) return;
+	CHECK_EQ_INT(size, 40 + 8 + 5);
+	CHECK_EQ_INT(pkt[0] >> 4, 6);			/* version */
+	/* version|tclass|flow = 6, 0x20, 0x12345 */
+	CHECK_EQ_INT(((pkt[0] & 0x0f) << 4) | (pkt[1] >> 4), 0x20);
+	CHECK_EQ_INT(((pkt[1] & 0x0f) << 16) | (pkt[2] << 8) | pkt[3], 0x12345);
+	CHECK_EQ_INT((pkt[4] << 8) | pkt[5], 13);	/* payload length */
+	CHECK_EQ_INT(pkt[6], 58);			/* next header: ICMPv6 */
+	CHECK_EQ_INT(pkt[7], 7);			/* hop limit */
+	{
+		unsigned char a[16];
+		tu_pton6(V6SRC, a);
+		CHECK_MEM_EQ(pkt + 8, a, 16);
+		tu_pton6(V6DST, a);
+		CHECK_MEM_EQ(pkt + 24, a, 16);
+	}
+
+	TEST("ipv6: the ICMPv6 checksum covers the pseudo header (RFC 4443 2.3)");
+	/* independent computation: the ICMPv6 message with a zero checksum */
+	memcpy(seg, pkt + 40, 13);
+	seg[2] = seg[3] = 0;
+	ck = tu_l4_cksum6(V6SRC, V6DST, 58, seg, 13);
+	CHECK_MEM_EQ(pkt + 42, &ck, 2);
+	/* and it really differs from the ICMPv4-style sum (no pseudo header) */
+	CHECK(tu_cksum(seg, 13) != ck);
+	free(pkt);
+
+	TEST("ipv6: TCP checksum uses the IPv6 pseudo header");
+	pkt = build_apd("ip6(saddr=2001:db8::1,daddr=2001:db8::2)"
+			"+tcp(sport=1234,dport=80,seq=1000,ack=2000,flags=s,win=512)", &size);
+	CHECK(pkt != NULL);
+	if (!pkt) return;
+	CHECK_EQ_INT(size, 60);
+	CHECK_EQ_INT(pkt[6], 6);			/* next header: TCP */
+	CHECK_EQ_INT((pkt[4] << 8) | pkt[5], 20);
+	memcpy(seg, pkt + 40, 20);
+	seg[16] = seg[17] = 0;
+	ck = tu_l4_cksum6(V6SRC, V6DST, 6, seg, 20);
+	CHECK_MEM_EQ(pkt + 40 + 16, &ck, 2);
+	free(pkt);
+
+	TEST("ipv6: UDP checksum and length");
+	pkt = build_apd("ip6(saddr=2001:db8::1,daddr=2001:db8::2)"
+			"+udp(sport=53,dport=1024)+data(str=xy)", &size);
+	CHECK(pkt != NULL);
+	if (!pkt) return;
+	CHECK_EQ_INT(size, 40 + 8 + 2);
+	CHECK_EQ_INT(pkt[6], 17);
+	CHECK_EQ_INT((pkt[40+4] << 8) | pkt[40+5], 10);	/* UDP length */
+	memcpy(seg, pkt + 40, 10);
+	seg[6] = seg[7] = 0;
+	ck = tu_l4_cksum6(V6SRC, V6DST, 17, seg, 10);
+	CHECK_MEM_EQ(pkt + 40 + 6, &ck, 2);
+	free(pkt);
+
+	TEST("ipv6: dissect a packet built independently, byte-exact round trip");
+	memset(buf, 0, sizeof(buf));
+	{
+		int hlen = tu_build_ip6(buf, 0, 0, 13, 58, V6SRC, V6DST);
+		unsigned char *ic = buf + hlen;
+		ic[0] = 128; ic[1] = 0;			/* echo request */
+		tu_put16(ic + 4, 7); tu_put16(ic + 6, 3);
+		memcpy(ic + 8, "hello", 5);
+		ck = tu_l4_cksum6(V6SRC, V6DST, 58, ic, 13);
+		memcpy(ic + 2, &ck, 2);
+		d = describe(buf, hlen + 13, 0, &layers, &flags);
+	}
+	CHECK(d != NULL);
+	CHECK_EQ_INT(layers, 3);			/* ip6 + icmp6 + data */
+	CHECK_EQ_INT(flags, 0);				/* checksum verified */
+	if (d) {
+		CHECK(strstr(d, "ip6(ver=6,") == d);
+		CHECK(strstr(d, "saddr=2001:db8::1") != NULL);
+		CHECK(strstr(d, "daddr=2001:db8::2") != NULL);
+		CHECK(strstr(d, "nh=58") != NULL);
+		CHECK(strstr(d, "+icmp6(type=128,code=0,") != NULL);
+		CHECK(strstr(d, "id=7,seq=3") != NULL);
+		CHECK(strstr(d, "+data(str=hello)") != NULL);
+		/* the description rebuilds the same bytes */
+		{
+			unsigned char *again;
+			size_t asize;
+			char *copy = strdup(d);
+			again = build_apd(copy, &asize);
+			CHECK(again != NULL);
+			if (again) {
+				CHECK_EQ_INT(asize, 53);
+				CHECK_MEM_EQ(again, buf, 53);
+				free(again);
+			}
+			free(copy);
+		}
+	}
+
+	TEST("ipv6: a bad ICMPv6 checksum is flagged");
+	buf[42] ^= 0xff;
+	d = describe(buf, 53, 0, &layers, &flags);
+	CHECK(d != NULL);
+	CHECK(flags & ARS_SPLIT_FBADCKSUM);
+	buf[42] ^= 0xff;
+
+	TEST("ipv6: truncated header and truncated ICMPv6");
+	{
+		int i;
+		/* a header shorter than 40 bytes is truncated */
+		for (i = 1; i < 40; i++) {
+			d = describe(buf, i, 0, &layers, &flags);
+			CHECK(d != NULL);
+			CHECK(flags & ARS_SPLIT_FTRUNC);
+		}
+		/* exactly 40 bytes: a complete header and nothing after it */
+		d = describe(buf, 40, 0, &layers, &flags);
+		CHECK(d != NULL);
+		CHECK_EQ_INT(layers, 1);
+		CHECK_EQ_INT(flags, 0);
+		/* 41..47: the ICMPv6 header itself is truncated */
+		for (i = 41; i < 48; i++) {
+			d = describe(buf, i, 0, &layers, &flags);
+			CHECK(d != NULL);
+			CHECK(flags & ARS_SPLIT_FTRUNC);
+		}
+	}
+
+	TEST("ipv6: payload_len shorter than what is captured trims the packet");
+	memset(buf, 0, sizeof(buf));
+	tu_build_ip6(buf, 0, 0, 0, 58, V6SRC, V6DST);	/* plen 0 */
+	buf[40] = 128;
+	d = describe(buf, 60, 0, &layers, &flags);
+	CHECK(d != NULL);
+	CHECK_EQ_INT(layers, 1);			/* only the header */
+
+	TEST("ipv6: an extension header is kept as data, not misparsed");
+	memset(buf, 0, sizeof(buf));
+	tu_build_ip6(buf, 0, 0, 8, 44, V6SRC, V6DST);	/* 44 = Fragment */
+	buf[40] = 58; buf[41] = 0;			/* fragment header */
+	d = describe(buf, 48, 0, &layers, &flags);
+	CHECK(d != NULL);
+	CHECK(ars_ip6_is_extension(44) && ars_ip6_is_extension(0) &&
+	      ars_ip6_is_extension(43) && ars_ip6_is_extension(60));
+	CHECK(!ars_ip6_is_extension(58) && !ars_ip6_is_extension(6));
+	if (d) {
+		CHECK(strstr(d, "ip6(") == d);
+		CHECK(strstr(d, "+data(") != NULL);	/* the 8 bytes are kept */
+		CHECK(strstr(d, "icmp6(") == NULL);	/* not dissected as ICMPv6 */
+	}
+
+	TEST("ipv6: IPv4 dissection is unaffected (version nibble dispatch)");
+	memset(buf, 0, sizeof(buf));
+	{
+		int hlen = tu_build_ip(buf, 0, 40, 6, SADDR, DADDR);
+		tu_build_tcp(buf + hlen, 1, 2, 0x02, 5);
+		d = describe(buf, 40, 0, &layers, &flags);
+	}
+	CHECK(d != NULL);
+	if (d) CHECK(strstr(d, "ip(ihl=0x5,ver=0x4") == d);
+
+	TEST("ipv6: sending is refused with a clear error (offline slice)");
+	{
+		struct ars_packet p;
+		char apd[] = "ip6(saddr=2001:db8::1,daddr=2001:db8::2)+icmp6(type=128)";
+		ars_init(&p);
+		CHECK_EQ_INT(ars_d_build(&p, apd), -ARS_OK);
+		CHECK_EQ_INT(ars_compile(&p), -ARS_OK);
+		CHECK(ars_send(-1, &p, NULL, 0) != -ARS_OK);
+		CHECK(p.p_error != NULL && strstr(p.p_error, "not supported yet") != NULL);
+		ars_destroy(&p);
+	}
+
+	TEST("ipv6: an unknown field is an error, not silently ignored");
+	{
+		struct ars_packet p;
+		char apd[] = "ip6(bogus=1)";
+		ars_init(&p);
+		CHECK(ars_d_build(&p, apd) != -ARS_OK);
+		ars_destroy(&p);
+		ars_init(&p);
+		{
+			char apd2[] = "ip6()+icmp6(bogus=1)";
+			CHECK(ars_d_build(&p, apd2) != -ARS_OK);
+		}
+		ars_destroy(&p);
+	}
+
+	TEST("ipv6: explicit plen/nh are kept (deliberately wrong packets)");
+	pkt = build_apd("ip6(saddr=2001:db8::1,daddr=2001:db8::2,plen=999,nh=99)"
+			"+icmp6(type=128,cksum=0x1111)", &size);
+	CHECK(pkt != NULL);
+	if (pkt) {
+		CHECK_EQ_INT((pkt[4] << 8) | pkt[5], 999);
+		CHECK_EQ_INT(pkt[6], 99);
+		CHECK_EQ_INT(pkt[42], 0x11);
+		CHECK_EQ_INT(pkt[43], 0x11);
+		free(pkt);
+	}
+}
+
 int main(void)
 {
 	hping_config_init(&cfg);
@@ -798,5 +1014,6 @@ int main(void)
 	test_display_ipopt();
 	test_send_icmp_other();
 	test_pcap_recv();
+	test_ipv6_vectors();
 	return tu_report("test_core");
 }

@@ -1,0 +1,109 @@
+StyxWire platform and link-layer support
+========================================
+
+This file separates three different claims, because they are often
+confused:
+
+    compiles      the tree builds there
+    unit-tested   "make check" was run there and passed
+    live-tested   packets were actually sent and received there
+
+An #ifdef for a platform is none of the three. Nothing below is claimed
+unless it was run; "not tried" means exactly that.
+
+OPERATING SYSTEMS
+
+  Platform            compiles  unit-tested  live-tested  notes
+  ------------------  --------  -----------  -----------  ------------------
+  Linux (x86-64)      yes       yes          no           the tree's
+                                                          development and CI
+                                                          platform
+  FreeBSD / OpenBSD   not tried not tried    not tried    BPF paths are in
+  NetBSD                                                  the source but
+                                                          unverified
+  macOS               not tried not tried    not tried    same
+  Solaris / others    not tried not tried    not tried
+
+The Linux column was produced with:
+
+    GCC 16.2.1 and clang 22.1.8, libpcap 1.10.6, Tcl 8.6.16 and Tcl 9.0.1
+    Linux 7.2 x86-64, as an ordinary user (uid != 0)
+
+"live-tested: no" on Linux is deliberate: the offline suite must run
+without root and without putting traffic on a network, so sending and
+receiving on a real interface is not covered by it. That verification is
+still outstanding for every platform.
+
+LINK-LAYER TYPES (DLT)
+
+StyxWire takes the link-layer type from the capture handle itself
+(pcap_datalink) and derives the offset of the IP header from it. It
+never assumes Ethernet. The mapping is getlhs.c:dltype_to_lhs().
+
+  DLT                  bytes  status         checked by
+  -------------------  -----  -------------  --------------------------
+  DLT_EN10MB              14  fixture        tests/linklayer.sh,
+                                             tests/test_waitpacket.c
+  DLT_RAW                  0  fixture        same
+  DLT_NULL                 4  fixture        same (BSD loopback, host
+                                             byte order AF)
+  DLT_LOOP                 4  fixture        same (OpenBSD loopback,
+                                             network byte order AF)
+  DLT_LINUX_SLL           16  fixture        same (cooked capture v1)
+  DLT_LINUX_SLL2          20  fixture        same (cooked capture v2,
+                                             what "any" gives on a
+                                             current Linux)
+  DLT_PPP                  4  from the spec  not exercised
+  DLT_PPP_SERIAL           4  from the spec  not exercised
+  DLT_C_HDLC               4  from the spec  not exercised
+  DLT_PPP_BSDOS           24  from the spec  not exercised
+  DLT_SLIP                16  from the spec  not exercised
+  DLT_SLIP_BSDOS          16  from the spec  not exercised
+  DLT_FDDI                13  from the spec  not exercised
+  DLT_ATM_RFC1483          8  from the spec  not exercised
+  DLT_CIP                  8  from the spec  not exercised
+  DLT_ATM_CLIP             8  from the spec  not exercised
+  DLT_LANE8023            16  from the spec  not exercised (2 byte LANE
+                                             header + Ethernet header)
+  anything else            -  unsupported    tests/test_waitpacket.c
+
+"fixture" means a pcap savefile carrying that link header in front of a
+known IPv4/TCP datagram is read back and the reply must be dissected
+with the right field values: a wrong offset makes the test fail.
+"from the spec" means the size comes from the format definition and was
+never run against a real capture of that type.
+
+UNSUPPORTED IS A DECISION, NOT AN OVERSIGHT
+
+DLT_IEEE802_11, the radiotap types and DLT_IEEE802 (802.5 token ring)
+have no fixed header length: it depends on the frame (QoS and address
+count for 802.11, radiotap's own length field, and the 0 to 18 byte
+routing information field for token ring).
+Guessing a constant would silently misparse every packet, so they are
+refused with a diagnostic naming the type:
+
+    % styxwire --read wifi.pcap -S -p 80 -a 10.0.0.1 10.0.0.2
+    styxwire: unsupported link layer type IEEE802_11_RADIO (127) on this
+    capture source;
+    supported types are listed in docs/PLATFORMS.txt
+
+The exit status is 1. The Tcl "styxwire recv" path reports the same
+thing in the interpreter result. Capturing such a link with a cooked
+capture ("-i any" on Linux, which yields DLT_LINUX_SLL2) works.
+
+hping3 returned 14 for token ring, which is the MAC header alone and
+misses the LLC/SNAP header in front of the IP datagram; the frames were
+dissected at the wrong offset rather than refused. It is now refused.
+
+Before this was fixed, an unsupported type stored (unsigned) -1 as the
+link header size, which the next receive turned into a 4 GiB
+variable-length array on the stack; getlhs.c now leaves the size alone
+and fails.
+
+ADDING A TYPE
+
+Add the case to dltype_to_lhs() with the size from the format
+definition, add the type to the loop in tests/test_waitpacket.c and to
+tests/linklayer.sh with a header that a real capture would carry, and
+move its row above into the "fixture" group. A type whose header length
+is not constant does not belong in the switch at all.

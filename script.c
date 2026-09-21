@@ -382,7 +382,13 @@ static int HpingRecvPackets(struct recv_handler *ra, Tcl_Interp *interp, Tcl_Obj
 	int lhs = ra->rh_linkhdrsize;
 
 	if (lhs < 0) {
-		Tcl_SetResult(interp, "Unknown link layer header size for this interface", TCL_STATIC);
+		const char *dn = pcap_datalink_val_to_name(
+					pcap_datalink(ra->rh_pcapfp));
+
+		Tcl_ResetResult(interp);
+		Tcl_AppendResult(interp, "Unsupported link layer type ",
+			dn ? dn : "(unknown)", " on interface ",
+			ra->rh_ifname, NULL);
 		return 1;
 	}
 	while(1) {

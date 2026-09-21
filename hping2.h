@@ -393,6 +393,7 @@ void	wait_packet(void);			/* handle incoming packets */
 void	show_usage(void);
 void	show_version(void);
 int	resolve_addr(struct sockaddr * addr, char *hostname); /* resolver */
+int	resolve_is_ipv6_only(const char *hostname); /* IPv6-only target? */
 
 /* lifecycle (lifecycle.c) */
 int	hping_init(void);			/* resolve, open sockets, signals */

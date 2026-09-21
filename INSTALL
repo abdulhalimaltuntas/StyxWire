@@ -38,7 +38,7 @@ configure options and variables
 -------------------------------
 
   --prefix=DIR      installation prefix           (default /usr/local)
-  --sbindir=DIR     where hping3 goes             (default PREFIX/sbin)
+  --sbindir=DIR     where styxwire goes           (default PREFIX/sbin)
   --mandir=DIR      manual pages                  (default PREFIX/share/man)
   --datadir=DIR     Tcl example scripts           (default PREFIX/share)
   --no-tcl          build without Tcl scripting
@@ -70,7 +70,7 @@ configure options and variables
 make targets
 ------------
 
-  make                 build ./hping3
+  make                 build ./styxwire
   make check           build and run the test-suite (tests/)
   make WERROR=1        treat compiler warnings as errors (CI does this)
   make SANITIZE=1 ...  build with ASan/UBSan; combine with check, e.g.
@@ -80,6 +80,8 @@ make targets
   make libars.a        the ARS packet library as a static archive
   make fuzz            build the libFuzzer targets (needs clang), then
                        tests/fuzz_split, tests/fuzz_apd, tests/fuzz_opts
+  make bench           build and run the offline benchmark of the packet
+                       engine (docs/BENCHMARK.txt)
   make clean / distclean
 
 Installation layout and staging
@@ -87,25 +89,29 @@ Installation layout and staging
 
   make install DESTDIR=/tmp/stage   # nothing is written outside DESTDIR
 
-  sbindir/hping3            the binary (mode 755)
-  sbindir/hping, hping2     relative symlinks to hping3 (ln -sf: repeated
-                            installs just replace them)
-  mandir/man8/hping3.8      manual page
-  datadir/hping3/lib/*.htcl Tcl example scripts (only with Tcl support)
+  sbindir/styxwire            the binary (mode 755)
+  sbindir/hping3, hping2,     relative symlinks to styxwire (ln -sf:
+  sbindir/hping               repeated installs just replace them)
+  mandir/man8/styxwire.8      manual page
+  mandir/man8/hping3.8        symlink to it
+  datadir/styxwire/lib/*.htcl Tcl example scripts (only with Tcl support)
 
   Paths containing spaces are supported (they are quoted in the recipes).
-  Nothing is made setuid: run hping3 as root or with the needed
+  Nothing is made setuid: run styxwire as root or with the needed
   capabilities. See the README about the risks of setuid installations.
 
 Test-suite
 ----------
 
   "make check" builds tests/test_core, tests/test_waitpacket,
-  tests/test_scan, tests/test_loop, tests/test_parse and (with Tcl)
-  tests/test_script, runs them, then runs tests/cli.sh (--help/--version/
-  option validation against ./hping3), tests/install.sh (staged install
-  into a temporary directory) and tests/libars.sh (a program linked
-  against libars.a alone). All of it runs as an ordinary user without
+  tests/test_scan, tests/test_loop, tests/test_parse, tests/test_output
+  and (with Tcl) tests/test_script, runs them, then runs tests/cli.sh
+  (--help/--version/option validation against ./styxwire),
+  tests/linklayer.sh (a pcap fixture per supported link-layer type),
+  tests/install.sh (staged install into a temporary directory),
+  tests/libars.sh (a program linked against libars.a alone),
+  tests/rcfile.sh (the startup file) and tests/bench --selftest (the
+  benchmark workloads compute what they claim, untimed). All of it runs as an ordinary user without
   opening a socket: packets are crafted in memory or read from pcap
   savefiles written by the tests themselves, and the event loop is driven
   by a fake clock.

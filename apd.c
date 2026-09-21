@@ -104,6 +104,8 @@ int ars_d_set_tcpopt_wscale(struct ars_packet *pkt, int layer, char *f, char *v)
 int ars_d_set_tcpopt_sack(struct ars_packet *pkt, int layer, char *f, char *v);
 int ars_d_set_tcpopt_echo(struct ars_packet *pkt, int layer, char *f, char *v);
 int ars_d_set_tcpopt_dumb(struct ars_packet *pkt, int layer, char *f, char *v);
+int ars_d_set_ip6(struct ars_packet *pkt, int layer, char *f, char *v);
+int ars_d_set_icmp6(struct ars_packet *pkt, int layer, char *f, char *v);
 int ars_d_set_igrp(struct ars_packet *pkt, int layer, char *f, char *v);
 int ars_d_set_igrpentry(struct ars_packet *pkt, int layer, char *f, char *v);
 int ars_d_set_tcpopt_ts(struct ars_packet *pkt, int layer, char *f, char *v);
@@ -134,6 +136,8 @@ struct ars_d_keyword_info ars_dkinfo[ARS_DKINFO_SIZE] = {
 	{"tcp.ts",	ARS_TCPOPT_TIMESTAMP, ars_add_tcpopt, ars_d_set_tcpopt_ts},
 	{"tcp.timestamp", ARS_TCPOPT_TIMESTAMP, ars_add_tcpopt, ars_d_set_tcpopt_ts}, /* alias */
 	{"icmp",	0,		ars_add_icmphdr, ars_d_set_icmp},
+	{"ip6",		0,		ars_add_ip6hdr,	ars_d_set_ip6},
+	{"icmp6",	0,		ars_add_icmp6hdr, ars_d_set_icmp6},
 	{"igrp",	0,		ars_add_igrphdr, ars_d_set_igrp},
 	{"igrp.entry",	0,		ars_add_igrpentry, ars_d_set_igrpentry},
 	{"data",	0,		ars_add_data,	ars_d_set_data},
@@ -682,6 +686,81 @@ int ars_d_set_icmp(struct ars_packet *pkt, int layer, char *f, char *v)
 		icmp->un.gateway = htonl(ars_atou(v));
 	} else {
 		ars_set_error(pkt, "Invalid field for ICMP layer: '%s'", f);
+		return -ARS_INVALID;
+	}
+	return -ARS_OK;
+}
+
+/* IPv6 header fields. Addresses accept a literal or a host name with an
+ * AAAA record (ars_resolve6). */
+int ars_d_set_ip6(struct ars_packet *pkt, int layer, char *f, char *v)
+{
+	struct ars_ip6hdr *ip6;
+
+	ARS_DEF_LAYER;
+	ip6 = pkt->p_layer[layer].l_data;
+
+	if (strcasecmp(f, "saddr") == 0) {
+		return ars_resolve6(pkt, ip6->saddr, v);
+	} else if (strcasecmp(f, "daddr") == 0) {
+		return ars_resolve6(pkt, ip6->daddr, v);
+	} else if (strcasecmp(f, "ver") == 0) {
+		ARS_IP6_SET(ip6, ars_atou(v), ARS_IP6_TCLASS(ip6),
+				ARS_IP6_FLOW(ip6));
+		pkt->p_layer[layer].l_flags |= ARS_TAKE_IP6_VERSION;
+	} else if (strcasecmp(f, "tclass") == 0) {
+		ARS_IP6_SET(ip6, ARS_IP6_VERSION(ip6), ars_atou(v),
+				ARS_IP6_FLOW(ip6));
+	} else if (strcasecmp(f, "flow") == 0) {
+		ARS_IP6_SET(ip6, ARS_IP6_VERSION(ip6), ARS_IP6_TCLASS(ip6),
+				ars_atou(v));
+	} else if (strcasecmp(f, "plen") == 0) {
+		ip6->payload_len = htons(ars_atou(v));
+		pkt->p_layer[layer].l_flags |= ARS_TAKE_IP6_PAYLOADLEN;
+	} else if (strcasecmp(f, "nh") == 0 || strcasecmp(f, "nexthdr") == 0) {
+		if (!strcasecmp(v, "icmp6") || !strcasecmp(v, "icmpv6"))
+			ip6->nexthdr = ARS_IPPROTO_ICMPV6;
+		else if (!strcasecmp(v, "udp"))
+			ip6->nexthdr = ARS_IPPROTO_UDP;
+		else if (!strcasecmp(v, "tcp"))
+			ip6->nexthdr = ARS_IPPROTO_TCP;
+		else if (!strcasecmp(v, "none"))
+			ip6->nexthdr = ARS_IPPROTO_NONE;
+		else
+			ip6->nexthdr = ars_atou(v);
+		pkt->p_layer[layer].l_flags |= ARS_TAKE_IP6_NEXTHDR;
+	} else if (strcasecmp(f, "hlim") == 0 || strcasecmp(f, "hoplimit") == 0) {
+		ip6->hoplimit = ars_atou(v);
+	} else {
+		ars_set_error(pkt, "Invalid field for IP6 layer: '%s'", f);
+		return -ARS_INVALID;
+	}
+	return -ARS_OK;
+}
+
+/* ICMPv6 fields (the header layout is the ICMPv4 one) */
+int ars_d_set_icmp6(struct ars_packet *pkt, int layer, char *f, char *v)
+{
+	struct ars_icmphdr *icmp;
+
+	ARS_DEF_LAYER;
+	icmp = pkt->p_layer[layer].l_data;
+
+	if (strcasecmp(f, "type") == 0) {
+		icmp->type = ars_atou(v);
+	} else if (strcasecmp(f, "code") == 0) {
+		icmp->code = ars_atou(v);
+	} else if (strcasecmp(f, "cksum") == 0) {
+		icmp->checksum = htons(ars_atou(v));
+		pkt->p_layer[layer].l_flags |= ARS_TAKE_ICMP6_CKSUM;
+	} else if (strcasecmp(f, "id") == 0) {
+		icmp->un.echo.id = htons(ars_atou(v));
+	} else if (strcasecmp(f, "seq") == 0) {
+		icmp->un.echo.sequence = htons(ars_atou(v));
+	} else if (strcasecmp(f, "unused") == 0) {
+		icmp->un.gateway = htonl(ars_atou(v));
+	} else {
+		ars_set_error(pkt, "Invalid field for ICMP6 layer: '%s'", f);
 		return -ARS_INVALID;
 	}
 	return -ARS_OK;

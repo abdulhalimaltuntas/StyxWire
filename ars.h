@@ -56,6 +56,8 @@
 
 /* Headers size */
 #define ARS_ICMPHDR_SIZE	sizeof(struct ars_icmphdr)
+#define ARS_IP6HDR_SIZE		sizeof(struct ars_ip6hdr)
+#define ARS_ICMP6HDR_SIZE	sizeof(struct ars_icmphdr) /* same layout */
 #define ARS_UDPHDR_SIZE		sizeof(struct ars_udphdr)
 #define ARS_TCPHDR_SIZE		sizeof(struct ars_tcphdr)
 #define ARS_IPHDR_SIZE		sizeof(struct ars_iphdr)
@@ -174,6 +176,14 @@
 #define ARS_ICMP_EXC_TTL		0       /* TTL count exceeded */
 #define ARS_ICMP_EXC_FRAGTIME		1       /* TTL exceeded reassembling */
 
+/* ICMPv6 types (RFC 4443) */
+#define ARS_ICMP6_DEST_UNREACH		1
+#define ARS_ICMP6_PKT_TOOBIG		2
+#define ARS_ICMP6_TIME_EXCEEDED		3
+#define ARS_ICMP6_PARAMPROB		4
+#define ARS_ICMP6_ECHO			128
+#define ARS_ICMP6_ECHOREPLY		129
+
 /* IGRP defines */
 #define ARS_IGRP_OPCODE_UPDATE		1
 #define ARS_IGRP_OPCODE_REQUEST		2
@@ -199,6 +209,40 @@ struct ars_iphdr {
         __u32   saddr;
         __u32   daddr;
 };
+
+/* The IPv6 header (RFC 8200 section 3).
+ *
+ * The first 32 bit word packs version (4), traffic class (8) and flow
+ * label (20); it is kept as one network-order word and accessed through
+ * the ars_ip6_* helpers so that no bitfield endianness question arises.
+ * Addresses are plain byte arrays: no alignment requirement. */
+struct ars_ip6hdr {
+	__u32	ver_tc_fl;	/* network order: 4|8|20 bits */
+	__u16	payload_len;	/* bytes after this header */
+	__u8	nexthdr;	/* next header (an IP protocol number) */
+	__u8	hoplimit;
+	__u8	saddr[16];
+	__u8	daddr[16];
+};
+
+/* The IPv6 pseudo header used by the TCP/UDP/ICMPv6 checksum
+ * (RFC 8200 section 8.1) */
+struct ars_ip6_pseudohdr {
+	__u8	saddr[16];
+	__u8	daddr[16];
+	__u32	len;		/* upper-layer packet length, network order */
+	__u8	zero[3];
+	__u8	nexthdr;
+};
+
+/* version/traffic class/flow label accessors (host values) */
+#define ARS_IP6_VERSION(h)	((ntohl((h)->ver_tc_fl) >> 28) & 0xf)
+#define ARS_IP6_TCLASS(h)	((ntohl((h)->ver_tc_fl) >> 20) & 0xff)
+#define ARS_IP6_FLOW(h)		(ntohl((h)->ver_tc_fl) & 0xfffff)
+#define ARS_IP6_SET(h, v, tc, fl) \
+	((h)->ver_tc_fl = htonl((((__u32)(v) & 0xf) << 28) | \
+			        (((__u32)(tc) & 0xff) << 20) | \
+			        ((__u32)(fl) & 0xfffff)))
 
 /* The IP options structure */
 struct ars_ipopt {
@@ -366,6 +410,8 @@ struct ars_layer {
 #define ARS_TYPE_TCPOPT		6
 #define ARS_TYPE_IGRP		7
 #define ARS_TYPE_IGRPENTRY	8
+#define ARS_TYPE_IP6		9
+#define ARS_TYPE_ICMP6		10
 #define ARS_TYPE_DATA		31
 
 /* ARS packet context */
@@ -410,6 +456,14 @@ struct ars_packet {
 
 /* IGRP layer flags */
 #define ARS_TAKE_IGRP_CKSUM	(1 << 0)
+
+/* IPv6 layer flags */
+#define ARS_TAKE_IP6_VERSION	(1 << 0)
+#define ARS_TAKE_IP6_PAYLOADLEN	(1 << 1)
+#define ARS_TAKE_IP6_NEXTHDR	(1 << 2)
+
+/* ICMPv6 layer flags */
+#define ARS_TAKE_ICMP6_CKSUM	(1 << 0)
 
 /* Some function that acts on layer switch to the last layer with this */
 #define ARS_LAST_LAYER		-1
@@ -481,6 +535,8 @@ void *ars_add_udphdr(struct ars_packet *pkt, int unused);
 void *ars_add_tcphdr(struct ars_packet *pkt, int unused);
 void *ars_add_tcpopt(struct ars_packet *pkt, int option);
 void *ars_add_icmphdr(struct ars_packet *pkt, int unused);
+void *ars_add_ip6hdr(struct ars_packet *pkt, int unused);
+void *ars_add_icmp6hdr(struct ars_packet *pkt, int unused);
 void *ars_add_igrphdr(struct ars_packet *pkt, int unused);
 void *ars_add_igrpentry(struct ars_packet *pkt, int unused);
 void *ars_add_data(struct ars_packet *pkt, int size);
@@ -496,6 +552,9 @@ int ars_bsd_fix(struct ars_packet *pkt, unsigned char *packet, size_t size);
 int ars_set_flags(struct ars_packet *pkt, int layer, int flags);
 int ars_send(int s, struct ars_packet *pkt, struct sockaddr *sa, socklen_t slen);
 int ars_resolve(struct ars_packet *pkt, u_int32_t *dest, char *hostname);
+int ars_resolve6(struct ars_packet *pkt, void *dest16, char *hostname);
+int ars_ip6_pseudo_cksum(struct ars_packet *pkt, int layer, int nexthdr,
+			 u_int16_t *sum);
 int ars_set_error(struct ars_packet *pkt, const char *fmt, ...);
 int ars_d_build(struct ars_packet *pkt, char *t);
 int ars_valid_layer(int layer);
@@ -503,6 +562,19 @@ int ars_get_iface_list(struct ars_iface *iface, size_t *isize);
 int ars_get_iface(char *name, struct ars_iface *i);
 int ars_valid_layer(int layer);
 int ars_remove_layer(struct ars_packet *pkt, int layer);
+
+/* IPv6 split/serialize (split.c, rapd.c) */
+int ars_split_ip6(struct ars_packet *pkt, void *packet, size_t size,
+						int *state, int *len);
+int ars_split_icmp6(struct ars_packet *pkt, void *packet, size_t size,
+						int *state, int *len);
+int ars_rapd_ip6(struct adbuf *dest, struct ars_packet *pkt, int layer);
+int ars_rapd_icmp6(struct adbuf *dest, struct ars_packet *pkt, int layer);
+
+/* Non-zero when 'nexthdr' is an IPv6 extension header rather than an
+ * upper-layer protocol. The first IPv6 slice does not dissect extension
+ * headers: they are kept as a DATA layer (see docs/IPV6.txt). */
+int ars_ip6_is_extension(int nexthdr);
 
 /* split.c prototypes */
 int ars_seems_ip(struct ars_iphdr *ip, size_t size);

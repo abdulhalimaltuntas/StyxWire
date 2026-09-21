@@ -195,3 +195,79 @@ seçenektir.
 tam bir çevrimdışı boru hattı (`--read ... --json`). Gönderim tarafını
 kapatmak, "çevrimdışı okuma kendiliğinden yeniden gönderime dönüşmesin"
 (prompt §6) ilkesine uyar.
+
+## KK-11 — IPv6: önce çevrimdışı dilim, gönderim bilinçli olarak reddedilir (Aşama 5)
+
+**Bağlam.** Prompt §8 IPv6 istiyor. Gerçek gönderim `AF_INET6` raw socket,
+farklı kaynak adres seçimi, farklı yakalama filtresi ve farklı yanıt
+eşleştirme demek; hiçbiri yok. Buna karşılık ARS motoru bayt düzeyinde
+çalıştığı için başlık modeli, checksum ve çözümleme tamamen çevrimdışı
+doğrulanabilir.
+
+**Karar.** IPv6 iki parçaya ayrıldı. (1) **Yapılır:** `ip6` ve `icmp6` APD
+katmanları, RFC 8200 §8.1 pseudo-header ile TCP/UDP checksum'u, RFC 4443
+§2.3 gereği pseudo-header'ı **içeren** ICMPv6 checksum'u, sürüm nibble'ına
+göre IPv4/IPv6 ayrımı yapan çözümleyici, `build`/`describe`/`validate`.
+(2) **Yapılmaz:** `ars_send()` bir IPv6 paketini açık bir tanıyla reddeder;
+komut satırı IPv6 hedef verildiğinde "bu araç IPv4 gönderir, IPv6'yı
+çevrimdışı kurabilirsin" diyen, örnek içeren bir tanı basar ve 1 ile çıkar.
+Uzantı başlıkları ayrıştırılmaz, DATA katmanı olarak korunur. Belge:
+`docs/IPV6.txt`.
+
+**Gerekçe.** Yarım bir gönderim yolu, kullanıcının göremeyeceği biçimde
+yanlış datagram üretirdi; "sessizce yanlış" en kötü sonuç. Reddetme,
+yeteneğin sınırını kullanıcıya taşır. Çevrimdışı dilim ise root'suz ve
+ağsız tam doğrulanabilir: `test_core` içindeki vektörler checksum'ları
+bağımsız hesapla karşılaştırır ve `build → describe → build` turunun
+bayt-eşit olduğunu gösterir.
+
+**Geri alma koşulu.** `AF_INET6` gönderim/alım yolu yazılıp canlı ağda
+doğrulandığında reddetme kaldırılır; o ana kadar `docs/IPV6.txt`'teki
+matris tek doğru kaynaktır.
+
+## KK-12 — Link-layer: boyutu bilinmeyen tür tahmin edilmez, reddedilir (Aşama 5)
+
+**Bağlam.** `dltype_to_lhs()` bazı türler için yanlış ya da ölü değerler
+taşıyordu: `#ifdef DLT_IEE802_11` (bir E eksik) 802.11 dalını hiç
+derletmiyordu; token ring 14 döndürüyordu (LLC/SNAP hesaba katılmadan);
+`DLT_LINUX_SLL2` (modern Linux'ta `-i any` bunu verir) tabloda yoktu;
+desteklenmeyen türde `ctx.linkhdr_size`'a `(unsigned) -1` yazılıyordu.
+
+**Karar.** Tablo sabit uzunluklu türlerle sınırlandırıldı. Başlık uzunluğu
+kareye göre değişen türler (802.11, radiotap, 802.5 token ring'in 0-18 bayt
+routing information field'ı) `-1` döndürür ve `get_linkhdr_size()` türü
+adıyla anan bir tanı basıp başarısız olur — `ctx.linkhdr_size`'a dokunmadan.
+`DLT_LINUX_SLL2` (20) eklendi, `DLT_LANE8023` tarihsel 16 değerinde bırakıldı.
+Desteklenen her tür pcap fixture'ı ile sınanır (`tests/linklayer.sh`,
+`tests/test_waitpacket.c`); sınanmayanlar destek matrisinde ayrı
+işaretlenir (`docs/PLATFORMS.txt`).
+
+**Gerekçe.** Yanlış bir başlık boyutu her paketi sessizce yanlış ofsetten
+okutur; bu, "desteklenmiyor" demekten çok daha kötüdür. `#ifdef` bulunması
+destek değildir: matris "derleniyor / birim-test edildi / canlı test edildi"
+sütunlarını ayırır.
+
+**Etkisi.** Token ring yakalamaları artık çözümlenmek yerine reddedilir
+(eskiden yanlış ofsetten çözümleniyordu). 802.11 dalı zaten ölü koddu.
+
+## KK-13 — Performans: ölçüm altyapısı evet, hedef sayı hayır (Aşama 5)
+
+**Bağlam.** Prompt §8 "yeniden üretilebilir performans temeli" istiyor ve
+uydurma hedef koymayı yasaklıyor.
+
+**Karar.** `make bench` (`tests/bench.c`): yalnız bellek içi iş yükleri
+(APD→bayt, bayt→katman, describe, checksum; IPv4 ve IPv6), tekrar başına
+min/medyan/maks ns/op, `--wrap` ile tahsis sayımı, `getrusage` ile tepe
+bellek. Her koşu makineyi, CPU'yu, derleyiciyi, bayrakları ve CPU
+affinite'sini başlığa basar. Hedef eşik **tanımlanmadı**; `docs/BENCHMARK.txt`
+yalnızca "referans koşu" kaydeder. `make check`, `tests/bench --selftest` ile
+iş yüklerinin doğru şeyi hesapladığını doğrular (süre ölçmez).
+
+**Gerekçe.** Sayının anlamı ölçüm koşullarıyla birliktedir: aynı ikili
+sabitlenmeden koşturulduğunda `build4` art arda 1229 ns/op ve 2988 ns/op
+ölçüldü (P/E çekirdek farkı, 2.4 kat). Bu yüzden `make bench` mümkünse
+`taskset -c 0` ile koşar ve affiniteyi rapor eder. Hedef sayı koymak,
+ölçüm gürültüsünü gereksinime dönüştürmek olurdu.
+
+**Geri alma koşulu.** Profil çıkarılıp bir darboğaz kanıtlanırsa optimizasyon
+yapılır; öncesi/sonrası aynı makinede bu araçla gösterilir.

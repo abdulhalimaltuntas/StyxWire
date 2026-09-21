@@ -122,8 +122,34 @@ tests/test_script: tests/test_script.c tests/testutil.h script.c $(TEST_LINK) wa
 tests/libars_link: tests/libars_link.c libars.a
 	$(CC) $(ALL_CPPFLAGS) $(ALL_CFLAGS) $(ALL_LDFLAGS) -I. -o $@ tests/libars_link.c libars.a
 
-check: $(PROG) $(TEST_BINS) $(TEST_BINS_TCL)
+check: $(PROG) $(TEST_BINS) $(TEST_BINS_TCL) tests/bench
 	@sh tests/run.sh $(TEST_BINS) $(TEST_BINS_TCL)
+
+# ---------------------------------------------------------------------------
+# benchmarking (offline, no root, no traffic).
+#   make bench                     build and run with the defaults
+#   make bench BENCHFLAGS="-n 50000 -r 9"
+#   make bench BENCH_WRAP=         if your linker has no --wrap
+# The numbers only mean something next to numbers taken the same way on the
+# same machine: tests/bench prints the machine, the compiler and the flags
+# with every run. "make check" runs tests/bench --selftest, which verifies
+# the workloads compute what they claim without timing anything.
+# ---------------------------------------------------------------------------
+BENCH_OBJ = $(ARSOBJ) adbuf.o hex.o hstring.o strlcpy.o apdutils.o \
+	sbignum.o sbignum-tables.o
+BENCH_WRAP = -DBENCH_WRAP_MALLOC \
+	-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=free
+BENCHFLAGS =
+
+tests/bench: tests/bench.c $(BENCH_OBJ)
+	$(CC) $(ALL_CPPFLAGS) $(ALL_CFLAGS) $(ALL_LDFLAGS) -I. \
+		-DBENCH_CC='"$(CC)"' -DBENCH_CFLAGS='"$(ALL_CFLAGS)"' \
+		$(BENCH_WRAP) -o $@ tests/bench.c $(BENCH_OBJ) $(ALL_LDLIBS)
+
+bench: tests/bench
+	@if command -v taskset >/dev/null 2>&1; then \
+		taskset -c 0 ./tests/bench $(BENCHFLAGS); \
+	else ./tests/bench $(BENCHFLAGS); fi
 
 # ---------------------------------------------------------------------------
 # fuzzing (libFuzzer, clang only). The ARS engine and the option parser are
@@ -158,7 +184,7 @@ tests/fuzz_opts: tests/fuzz/fuzz_opts.c $(FUZZ_APP_OBJ)
 # cleaning
 # ---------------------------------------------------------------------------
 clean:
-	rm -rf $(PROG) $(PROG)-static hping3 *.o libars.a tests/*.o $(TEST_BINS) tests/test_script tests/test_loop tests/test_parse tests/test_output tests/libars_link tests/fuzz_split tests/fuzz_apd
+	rm -rf $(PROG) $(PROG)-static hping3 *.o libars.a tests/*.o $(TEST_BINS) tests/test_script tests/test_loop tests/test_parse tests/test_output tests/libars_link tests/bench tests/fuzz_split tests/fuzz_apd
 
 distclean: clean
 	rm -rf byteorder byteorder.h systype.h Makefile .depend .configure-tmp
@@ -196,6 +222,6 @@ strip: $(PROG)
 	strip $(PROG)
 	@ls -l ./$(PROG)
 
-.PHONY: all dep check fuzz clean distclean install uninstall strip
+.PHONY: all dep check fuzz bench clean distclean install uninstall strip
 
 -include .depend

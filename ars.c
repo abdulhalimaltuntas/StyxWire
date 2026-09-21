@@ -31,6 +31,8 @@ int ars_compiler_tcpopt(struct ars_packet *pkt, int layer);
 int ars_compiler_udp(struct ars_packet *pkt, int layer);
 int ars_compiler_icmp(struct ars_packet *pkt, int layer);
 int ars_compiler_igrp(struct ars_packet *pkt, int layer);
+int ars_compiler_ip6(struct ars_packet *pkt, int layer);
+int ars_compiler_icmp6(struct ars_packet *pkt, int layer);
 int ars_compiler_abort(struct ars_packet *pkt, int layer) { return 0; }
 
 /* Initialize a packets context:
@@ -321,6 +323,38 @@ void *ars_add_icmphdr(struct ars_packet *pkt, int unused)
 	return (struct ars_icmphdr*) pkt->p_layer[pkt->p_layer_nr-1].l_data;
 }
 
+/* Add an IPv6 layer */
+void *ars_add_ip6hdr(struct ars_packet *pkt, int unused)
+{
+	int retval;
+	struct ars_ip6hdr *ip6;
+
+	retval = ars_add_generic(pkt, sizeof(struct ars_ip6hdr), ARS_TYPE_IP6);
+	if (retval != -ARS_OK)
+		return NULL;
+	ip6 = pkt->p_layer[pkt->p_layer_nr].l_data;
+	ARS_IP6_SET(ip6, 6, 0, 0);
+	ip6->hoplimit = 64;
+	pkt->p_layer_nr++;
+	return pkt->p_layer[pkt->p_layer_nr-1].l_data;
+}
+
+/* Add an ICMPv6 layer (same header layout as ICMPv4, different checksum) */
+void *ars_add_icmp6hdr(struct ars_packet *pkt, int unused)
+{
+	int retval;
+	struct ars_icmphdr *icmp;
+
+	retval = ars_add_generic(pkt, sizeof(struct ars_icmphdr), ARS_TYPE_ICMP6);
+	if (retval != -ARS_OK)
+		return NULL;
+	icmp = pkt->p_layer[pkt->p_layer_nr].l_data;
+	icmp->type = ARS_ICMP6_ECHO;
+	icmp->code = 0;
+	pkt->p_layer_nr++;
+	return pkt->p_layer[pkt->p_layer_nr-1].l_data;
+}
+
 /* Add an IGRP layer */
 void *ars_add_igrphdr(struct ars_packet *pkt, int unused)
 {
@@ -518,8 +552,8 @@ struct ars_layer_info ars_linfo[ARS_TYPE_SIZE] = {
 { "TCPOPT",		ars_compiler_tcpopt,	ars_rapd_tcpopt,	6 },
 { "IGRP", 		ars_compiler_igrp,	ars_rapd_igrp,		7 },
 { "IGRPENTRY",		NULL,			ars_rapd_igrpentry,	8 },
-{ NULL, NULL, NULL, 9 },
-{ NULL, NULL, NULL, 10 },
+{ "IP6",		ars_compiler_ip6,	ars_rapd_ip6,		9 },
+{ "ICMP6",		ars_compiler_icmp6,	ars_rapd_icmp6,		10 },
 { NULL, NULL, NULL, 11 },
 { NULL, NULL, NULL, 12 },
 { NULL, NULL, NULL, 13 },
@@ -698,6 +732,12 @@ int ars_udptcp_cksum(struct ars_packet *pkt, int layer, u_int16_t *sum)
 	 * makes sense. */
 	while (j > 0 && pkt->p_layer[j].l_type == ARS_TYPE_IPOPT)
 		j--;
+	/* an IPv6 parent uses the RFC 8200 pseudo header instead */
+	if (j >= 0 && pkt->p_layer[j].l_type == ARS_TYPE_IP6) {
+		int nexthdr = (pkt->p_layer[layer].l_type == ARS_TYPE_TCP)
+			? ARS_IPPROTO_TCP : ARS_IPPROTO_UDP;
+		return ars_ip6_pseudo_cksum(pkt, layer, nexthdr, sum);
+	}
 	if (j < 0 || pkt->p_layer[j].l_type != ARS_TYPE_IP) {
 		ars_set_error(pkt, "TCP/UDP checksum requested, but IP header "
 				    "not found");
@@ -727,6 +767,124 @@ int ars_udptcp_cksum(struct ars_packet *pkt, int layer, u_int16_t *sum)
 			return err;
 	}
 	*sum = ars_multi_cksum(&mc, ARS_MC_FINAL, NULL, 0);
+	return -ARS_OK;
+}
+
+/* Non-zero for the IPv6 extension headers this slice does not dissect
+ * (RFC 8200). Keep in sync with docs/IPV6.txt. */
+int ars_ip6_is_extension(int nexthdr)
+{
+	switch (nexthdr) {
+	case 0:		/* Hop-by-Hop Options */
+	case 43:	/* Routing */
+	case 44:	/* Fragment */
+	case 50:	/* ESP */
+	case 51:	/* Authentication Header */
+	case 60:	/* Destination Options */
+	case 135:	/* Mobility */
+		return 1;
+	}
+	return 0;
+}
+
+/* Compute the RFC 8200 section 8.1 checksum of the upper-layer packet
+ * starting at 'layer', using the IPv6 header that precedes it.
+ * 'nexthdr' is the value to put in the pseudo header (the upper-layer
+ * protocol: TCP, UDP or ICMPv6). */
+int ars_ip6_pseudo_cksum(struct ars_packet *pkt, int layer, int nexthdr,
+			 u_int16_t *sum)
+{
+	struct ars_ip6hdr *ip6;
+	struct ars_ip6_pseudohdr pseudo;
+	struct mc_context mc;
+	int j = layer - 1, err;
+
+	/* the IPv6 header is the layer on the left (no options in v6) */
+	if (j < 0 || pkt->p_layer[j].l_type != ARS_TYPE_IP6) {
+		ars_set_error(pkt, "IPv6 checksum requested, but the IPv6 "
+				   "header is not the previous layer");
+		return -ARS_INVALID;
+	}
+	ip6 = pkt->p_layer[j].l_data;
+	memset(&pseudo, 0, sizeof(pseudo));
+	memcpy(pseudo.saddr, ip6->saddr, 16);
+	memcpy(pseudo.daddr, ip6->daddr, 16);
+	pseudo.len = htonl((u_int32_t) ars_relative_size(pkt, layer));
+	pseudo.nexthdr = (u_int8_t) nexthdr;
+
+	ars_multi_cksum(&mc, ARS_MC_INIT, NULL, 0);
+	err = ars_multi_cksum(&mc, ARS_MC_UPDATE, &pseudo, sizeof(pseudo));
+	if (err != -ARS_OK)
+		return err;
+	for (j = layer; j < ARS_MAX_LAYER; j++) {
+		if (pkt->p_layer[j].l_type == ARS_TYPE_NULL)
+			break;
+		err = ars_multi_cksum(&mc, ARS_MC_UPDATE,
+					pkt->p_layer[j].l_data,
+					pkt->p_layer[j].l_size);
+		if (err != -ARS_OK)
+			return err;
+	}
+	*sum = ars_multi_cksum(&mc, ARS_MC_FINAL, NULL, 0);
+	return -ARS_OK;
+}
+
+/* The IPv6 compiler: payload length and next header; IPv6 has no header
+ * checksum (RFC 8200 section 3). */
+int ars_compiler_ip6(struct ars_packet *pkt, int layer)
+{
+	struct ars_ip6hdr *ip6 = pkt->p_layer[layer].l_data;
+	int flags = pkt->p_layer[layer].l_flags;
+	int j;
+
+	if (ARS_DONTTAKE(flags, ARS_TAKE_IP6_VERSION))
+		ARS_IP6_SET(ip6, 6, ARS_IP6_TCLASS(ip6), ARS_IP6_FLOW(ip6));
+	if (ARS_DONTTAKE(flags, ARS_TAKE_IP6_PAYLOADLEN))
+		ip6->payload_len = htons((u_int16_t)
+			ars_relative_size(pkt, layer + 1));
+	if (ARS_DONTTAKE(flags, ARS_TAKE_IP6_NEXTHDR)) {
+		/* the protocol of the layer that follows; with nothing
+		 * after the header that is "no next header" (RFC 8200) */
+		ip6->nexthdr = ARS_IPPROTO_NONE;
+		for (j = layer + 1; j < ARS_MAX_LAYER; j++) {
+			switch (pkt->p_layer[j].l_type) {
+			case ARS_TYPE_NULL:
+				break;
+			case ARS_TYPE_IP6:
+				ip6->nexthdr = ARS_IPPROTO_IPV6; break;
+			case ARS_TYPE_IP:
+				ip6->nexthdr = ARS_IPPROTO_IPIP; break;
+			case ARS_TYPE_ICMP6:
+				ip6->nexthdr = ARS_IPPROTO_ICMPV6; break;
+			case ARS_TYPE_ICMP:
+				ip6->nexthdr = ARS_IPPROTO_ICMP; break;
+			case ARS_TYPE_UDP:
+				ip6->nexthdr = ARS_IPPROTO_UDP; break;
+			case ARS_TYPE_TCP:
+				ip6->nexthdr = ARS_IPPROTO_TCP; break;
+			default:
+				/* DATA and anything else: leave the value
+				 * the user set, or "no next header" */
+				break;
+			}
+			break;
+		}
+	}
+	return -ARS_OK;
+}
+
+/* The ICMPv6 compiler: unlike ICMPv4 the checksum covers the IPv6
+ * pseudo header (RFC 4443 section 2.3). */
+int ars_compiler_icmp6(struct ars_packet *pkt, int layer)
+{
+	struct ars_icmphdr *icmp = pkt->p_layer[layer].l_data;
+	int flags = pkt->p_layer[layer].l_flags;
+
+	if (ARS_DONTTAKE(flags, ARS_TAKE_ICMP6_CKSUM)) {
+		icmp->checksum = 0;
+		return ars_ip6_pseudo_cksum(pkt, layer, ARS_IPPROTO_ICMPV6,
+					    &icmp->checksum);
+	}
 	return -ARS_OK;
 }
 
@@ -921,6 +1079,9 @@ int ars_build_packet(struct ars_packet *pkt, unsigned char **packet, size_t *siz
  * system isn't FreeBSD or NetBSD. */
 int ars_bsd_fix(struct ars_packet *pkt, unsigned char *packet, size_t size)
 {
+	/* nothing to fix for IPv6: the BSD raw socket quirk is IPv4 only */
+	if (pkt->p_layer[0].l_type == ARS_TYPE_IP6)
+		return -ARS_OK;
 	if (pkt->p_layer[0].l_type != ARS_TYPE_IP ||
 	    size < sizeof(struct ars_iphdr)) {
 		ars_set_error(pkt, "BSD fix requested, but layer 0 not IP");
@@ -958,6 +1119,13 @@ int ars_send(int s, struct ars_packet *pkt, struct sockaddr *sa, socklen_t slen)
 	size_t size;
 	int error;
 
+	/* IPv6 packets can be built and dissected, but not sent yet:
+	 * say so instead of producing a wrong datagram (docs/IPV6.txt) */
+	if (pkt->p_layer[0].l_type == ARS_TYPE_IP6) {
+		ars_set_error(pkt, "sending IPv6 packets is not supported yet: "
+				   "build/describe them offline instead");
+		return -ARS_INVALID;
+	}
 	/* Perform the socket address completion if sa == NULL */
 	if (sa == NULL) {
 		struct ars_iphdr *ip;
@@ -983,6 +1151,29 @@ int ars_send(int s, struct ars_packet *pkt, struct sockaddr *sa, socklen_t slen)
 	error = sendto(s, packet, size, 0, _sa, slen);
 	free(packet);
 	return (error != -1) ? -ARS_OK : -ARS_ERROR;
+}
+
+/* Resolve a host name or literal to an IPv6 address, written as 16 bytes
+ * to 'dest16'. Returns -ARS_OK or -ARS_ERROR. */
+int ars_resolve6(struct ars_packet *pkt, void *dest16, char *hostname)
+{
+	struct addrinfo hints, *res;
+	struct in6_addr in6;
+
+	if (inet_pton(AF_INET6, hostname, &in6) == 1) {
+		memcpy(dest16, &in6, 16);
+		return -ARS_OK;
+	}
+	memset(&hints, 0, sizeof(hints));
+	hints.ai_family = AF_INET6;
+	hints.ai_socktype = SOCK_DGRAM;
+	if (getaddrinfo(hostname, NULL, &hints, &res) != 0 || res == NULL) {
+		ars_set_error(pkt, "Can't resolve the hostname to an IPv6 address");
+		return -ARS_ERROR;
+	}
+	memcpy(dest16, &((struct sockaddr_in6*) res->ai_addr)->sin6_addr, 16);
+	freeaddrinfo(res);
+	return -ARS_OK;
 }
 
 /* Resolve an hostname and write to 'dest' the IP */

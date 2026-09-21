@@ -1,0 +1,136 @@
+StyxWire and IPv6
+=================
+
+What works today is the offline half: the packet engine builds, dissects
+and describes IPv6 datagrams, with the checksums the RFCs require. What
+does not work is the wire half: the command line still sends and matches
+IPv4 only, and the engine refuses to send an IPv6 packet rather than put
+a wrong datagram on the network.
+
+This file says exactly where the line is, so that nobody has to read the
+source to find out.
+
+WHAT IS SUPPORTED
+
+    build        APD text -> IPv6 wire bytes            yes
+    describe     IPv6 wire bytes -> APD text            yes
+    validate     APD syntax and field checks            yes
+    checksums    ICMPv6, TCP and UDP over IPv6          yes
+    dissect      styxwire describe / the Tcl API        yes
+    --read       IPv6 frames in a savefile              no (skipped,
+                                                        with a warning)
+    send         raw socket transmission                no
+    receive      reply matching, RTT, statistics        no
+    CLI target   styxwire <IPv6 address>                no (clear error)
+
+THE APD LAYERS
+
+Two layers were added to the APD language (docs/APD.txt): "ip6" and
+"icmp6". They can be mixed with the existing layers, so TCP and UDP over
+IPv6 are described with the layers that already exist:
+
+    ip6(saddr=2001:db8::1,daddr=2001:db8::2)+icmp6(type=128,id=7,seq=1)+data(str=hi)
+    ip6(saddr=fe80::1,daddr=fe80::2)+tcp(sport=1234,dport=80,flags=s)
+    ip6(saddr=::1,daddr=::1)+udp(sport=53,dport=1024)+data(str=query)
+
+  ip6 fields
+    saddr, daddr    an IPv6 address, or a name that resolves to one
+    ver             version nibble (6 unless you are testing a peer)
+    tclass          traffic class, 8 bits
+    flow            flow label, 20 bits
+    plen            payload length; computed when not given
+    nh / nexthdr    next header: a number, or icmp6, tcp, udp, none
+    hlim / hoplimit hop limit (default 64)
+
+  icmp6 fields
+    type, code      ICMPv6 type and code (128 echo request, 129 reply)
+    cksum           checksum; computed when not given
+    id, seq         echo identifier and sequence number
+    unused          the 32 bit unused field of the error messages
+
+Anything the description does not set is computed at compile time:
+payload length, next header (taken from the following layer) and the
+checksums. Anything the description does set is kept exactly as written,
+including a deliberately wrong length or checksum -- building malformed
+packets on purpose is the point of the tool.
+
+CHECKSUMS
+
+IPv6 has no header checksum, so "ip6" has no cksum field.
+
+The upper layers use the RFC 8200 section 8.1 pseudo-header: the source
+and destination addresses, the upper-layer packet length as a 32 bit
+value, three zero bytes and the next header value. StyxWire picks the
+IPv6 pseudo-header automatically whenever the layer below TCP or UDP is
+"ip6", and the IPv4 one when it is "ip".
+
+ICMPv6 is the trap: unlike ICMPv4, its checksum covers the pseudo-header
+too (RFC 4443 section 2.3). StyxWire does that, which is why an ICMPv6
+checksum changes when you change the addresses:
+
+    % styxwire exec
+    styxwire> styxwire describe [styxwire build \
+        {ip6(saddr=2001:db8::1,daddr=2001:db8::2)+icmp6(type=128,id=7,seq=1)+data(str=hi)}]
+    ip6(ver=6,tclass=0x00,flow=0,plen=10,nh=58,hlim=64,saddr=2001:db8::1,
+    daddr=2001:db8::2)+icmp6(type=128,code=0,cksum=0xbbd4,id=7,seq=1)+data(str=hi)
+
+DISSECTING
+
+The ARS dissector chooses IPv4 or IPv6 from the version nibble of the
+first byte, so a buffer holding either is read correctly without being
+told which it is. That is what "styxwire describe", the Tcl API and
+libars.a use.
+
+The --read path is a different thing: it is the ordinary receive loop
+reading from a savefile instead of an interface, and that loop matches
+replies against an IPv4 probe. It therefore skips IPv6 datagrams, and
+says so once on stderr rather than dropping them without a word:
+
+    styxwire: skipping IPv6 datagrams: the receive path is IPv4 only
+    (docs/IPV6.txt)
+
+To look at the IPv6 frames of a capture today, read them with the Tcl
+API and describe them.
+
+Extension headers are not parsed. When the next header field names one
+(hop-by-hop, routing, fragment, ESP, AH, destination options, mobility),
+the rest of the datagram is kept as a DATA layer instead of being
+mis-parsed as a transport header. The bytes are all there and describe
+prints them; they are just not broken into fields yet.
+
+A truncated IPv6 datagram is reported as truncated, and a payload length
+shorter than the captured bytes trims the packet, the same way the IPv4
+path behaves.
+
+WHY SENDING IS REFUSED
+
+Sending would need an AF_INET6 raw socket, a different source address
+selection, a different receive filter and a different reply matcher.
+None of that exists yet, and a half-done version would send datagrams
+that are wrong in ways the user could not see. So ars_send() refuses an
+IPv6 packet with a diagnostic instead, and the command line says this
+when it is given an IPv6 target:
+
+    % styxwire -c 1 ::1
+    '::1' is an IPv6 address: styxwire's command line sends IPv4 only.
+    IPv6 packets can be built and dissected offline, for example:
+      styxwire exec (then: styxwire build {ip6(daddr=::1)+icmp6(type=128)})
+
+The exit status is 1, the same as any other target that cannot be used.
+
+TESTS
+
+tests/test_core.c drives the whole offline slice: the wire layout of
+every field, the three checksum kinds against independently computed
+values, a byte-exact build -> describe -> build round trip, truncation
+at every length from 1 to 47 bytes, payload-length trimming, an
+extension header kept as data, the refusal to send, and the errors for
+unknown fields. IPv4 packets are checked in the same run to show the
+version dispatch did not change them.
+
+WHAT WOULD COME NEXT
+
+An AF_INET6 send path, neighbour/router discovery types, extension
+header parsing as real layers, and IPv6 reply matching in the receive
+loop, in that order. Each of those needs live-network verification,
+which the offline test suite deliberately cannot provide.

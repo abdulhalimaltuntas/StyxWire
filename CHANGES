@@ -9,6 +9,36 @@ styxwire.8 man page linked as hping3.8); --version reports the StyxWire
 version and the hping3 base it descends from. The command line, exit
 codes, Tcl API and APD language are unchanged.
 
+------ phase 5: IPv6, link layers and performance (2026-09) -------
+
+See docs/ASAMA5-RAPORU.md. In short:
+
+  - IPv6, offline: new "ip6" and "icmp6" APD layers, RFC 8200 8.1
+    pseudo-header checksums for TCP and UDP over IPv6, RFC 4443
+    ICMPv6 checksums (which include the pseudo-header), and a
+    dissector that picks IPv4 or IPv6 from the version nibble.
+    styxwire build/describe/validate handle IPv6 packets.
+  - IPv6, on the wire: still IPv4 only, and now said so plainly.
+    ars_send() refuses an IPv6 packet instead of sending a wrong
+    datagram, and an IPv6 target on the command line gets a diagnostic
+    with a working offline example and exit status 1. docs/IPV6.txt
+    draws the line.
+  - Link layers: the IP offset comes from the capture's own DLT, never
+    from an Ethernet assumption. DLT_LINUX_SLL2 ("-i any" on a current
+    Linux) added; a dead "#ifdef DLT_IEE802_11" typo removed; types
+    whose header length is not fixed (802.11, radiotap, token ring)
+    are refused by name instead of guessed; an unsupported type no
+    longer stores (unsigned) -1 as the header size. Six types are
+    checked with pcap fixtures. Matrix in docs/PLATFORMS.txt.
+  - make bench: an offline, reproducible benchmark of the packet
+    engine (build, dissect, describe, checksum; IPv4 and IPv6) with
+    allocation counts and the machine, compiler and CPU affinity in
+    the header. No target numbers are defined. docs/BENCHMARK.txt.
+    "make check" runs tests/bench --selftest.
+  - Tests: tests/linklayer.sh (pcap fixtures per link type), link-layer
+    and DLT-table checks in tests/test_waitpacket.c, the IPv6 vectors
+    in tests/test_core.c; 13 groups.
+
 ------ phase 4: professional CLI and automation (2026-09) -------
 
 See docs/ASAMA4-RAPORU.md. In short:

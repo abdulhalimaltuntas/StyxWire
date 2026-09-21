@@ -56,6 +56,8 @@ LAYERS
   tcp.echoreply TCP option: Echo reply
   tcp.ts        TCP option: Timestamp     (alias: tcp.timestamp)
   icmp          ICMP header
+  ip6           IPv6 header
+  icmp6         ICMPv6 header
   igrp          IGRP header
   igrp.entry    IGRP entry
   data          Generic data
@@ -87,6 +89,22 @@ FIELDS
     id seq                numeric (echo id / sequence)
     gw                    address (redirect gateway)
     unused                numeric (the 32-bit id/seq/gw word)
+
+  IPv6 (ip6):
+    saddr daddr           address (IPv6 literal or host name)
+    ver tclass flow       version nibble, traffic class, flow label
+    plen                  payload length (computed when not given)
+    nh (alias nexthdr)    next header; also accepts icmp6/tcp/udp/none
+    hlim (alias hoplimit) hop limit (default 64)
+    There is no cksum field: IPv6 has no header checksum. TCP and UDP
+    below an ip6 layer use the RFC 8200 8.1 pseudo-header.
+
+  ICMPv6 (icmp6):
+    type code cksum       numeric (128 echo request, 129 echo reply)
+    id seq                numeric (echo id / sequence)
+    unused                numeric (the 32-bit unused word of the errors)
+    The checksum covers the IPv6 pseudo-header (RFC 4443 2.3), unlike
+    ICMPv4's. See docs/IPV6.txt for what is and is not supported.
 
   DATA (data), one field per layer:
     file=PATH             raw bytes read from a file
@@ -137,6 +155,12 @@ EXAMPLES
   ip(daddr=5.6.7.8)+tcp(dport=80,flags=s)+tcp.mss(size=1460)+tcp.ts(val=1,ecr=0)
 
   # a deliberately wrong IP checksum (kept because it is explicit)
+  # ICMPv6 echo request (offline only: the command line sends IPv4)
+  ip6(saddr=2001:db8::1,daddr=2001:db8::2)+icmp6(type=128,id=7,seq=1)+data(str=hi)
+
+  # TCP SYN over IPv6; the checksum uses the IPv6 pseudo-header
+  ip6(daddr=2001:db8::2)+tcp(sport=1234,dport=80,flags=s)
+
   ip(daddr=5.6.7.8,cksum=0x0000)+tcp(dport=80,flags=s)
 
   Command line:  styxwire --dry-run --apd-send 'ip(daddr=127.0.0.1)+icmp()'
