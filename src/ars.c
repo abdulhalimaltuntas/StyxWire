@@ -1146,8 +1146,10 @@ int ars_send(int s, struct ars_packet *pkt, struct sockaddr *sa, socklen_t slen)
 	}
 	if ((error = ars_build_packet(pkt, &packet, &size)) != ARS_OK)
 		return error;
-	if ((error = ars_bsd_fix(pkt, packet, size)) != ARS_OK)
+	if ((error = ars_bsd_fix(pkt, packet, size)) != ARS_OK) {
+		free(packet);
 		return error;
+	}
 	error = sendto(s, packet, size, 0, _sa, slen);
 	free(packet);
 	return (error != -1) ? -ARS_OK : -ARS_ERROR;

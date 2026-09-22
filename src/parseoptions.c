@@ -267,6 +267,9 @@ int parse_route(unsigned char *route, unsigned int *route_len, const char *arg)
                             break;
                     }
                 }
+                /* a malformed ':' prefix (bad position, bad format or
+                 * pointer >= 256) is invalid route syntax, rejected below */
+                __attribute__((fallthrough));
             default:
                 fprintf(stderr, "styxwire: invalid route syntax (try --route-help)\n");
                 return -1;

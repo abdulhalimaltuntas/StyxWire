@@ -455,3 +455,56 @@ düzenini yansıtır.
 
 **Geri alma koşulu.** Yok; yalnız dosya düzeni ve belge, çalışma zamanı
 davranışı değişmedi.
+
+## KK-19 — Derinlemesine statik/dinamik analiz denetimi ve düzeltmeler
+
+**Bağlam.** Depo baştan aşağı denetlenip bulunan gerçek kusurların
+düzeltilmesi istendi.
+
+**Yöntem.** clang static analyzer (`scan-build`, core/unix/security/deadcode/
+nullability), GCC 16 yüksek-uyarı derlemesi (`-Wextra -Wshadow
+-Wimplicit-fallthrough=3 -Wnull-dereference -Wduplicated-cond -Wlogical-op`),
+clang-tidy (`bugprone-*`, `clang-analyzer-*`), ve düzenlenen dosyalarda kısa
+fuzz koşusu. 344 scan-build bulgusunun ~320'si düşük-sinyalli `insecureAPI`
+tavsiyesiydi (her memcpy/fprintf'i işaretler); geri kalan ~11 ve derleyici
+uyarıları tek tek triyaj edildi.
+
+**Düzeltilen gerçek kusurlar.**
+1. `getifname.c` — `get_if_name()`'te debug çıktısı ilklendirilmemiş `sa`
+   değişkenini basıyordu; doğrusu, `get_output_if()`'in az önce doldurduğu
+   `output_if_addr`. (Yığında ilklendirilmemiş bellek okuması, yalnız
+   `--debug`.)
+2. `getifname.c` — `get_output_if()` içinde `socket()` dönüşü kontrol
+   edilmiyordu; başarısızlıkta `setsockopt`/`connect` fd -1 ile çağrılırdı.
+   Kontrol eklendi.
+3. `ars.c` — `ars_send()`'te `ars_bsd_fix()` başarısız olursa `packet`
+   sızıyordu (hata yolunda `free` yok). Eklendi.
+
+**Düzeltilen küçük kusurlar / uyarılar.**
+4. `ars.h` — `ars_valid_layer()` prototipi iki kez bildirilmişti; biri
+   kaldırıldı.
+5. `parseoptions.c` — `parse_route()`'ta `case ':'`'ten `default:`'a kasıtlı
+   ama işaretsiz fall-through; niyet yorumu + `__attribute__((fallthrough))`
+   ile açıklandı (davranış değişmedi).
+6. `hex.c` — `char hcharset[16] = "...16 hane..."` NUL'u düşürüyordu (GCC 16
+   `-Wunterminated-string-initialization`); yalnız indekslenen bu tablo
+   `static const char hcharset[]` yapıldı.
+
+**Değerlendirilip bilerek dokunulmayanlar (yanlış pozitif / zararsız).**
+scan-build'in `waitpacket.c:708` (negatif indeks) ve `apd.c:877` (p_layer[-1])
+bulguları ulaşılamaz: `cs_window_shift` varsayılanı 5 ve >=1 doğrulanır;
+`ARS_DEF_LAYER`, `ars_valid_layer()` ile -1'i reddeder. Alım yolundaki tüm
+`-Wsign-compare` uyarıları güvenli: `ip_size`/`enc_size` sınır kontrolleriyle
+(`waitpacket.c:111,149`) negatif olamaz, RTT'ler negatif değildir. sbignum.c
+(satıcı bignum kütüphanesi) uyarıları sözleşme gereği/yanlış pozitif olduğu
+için değiştirilmedi. clang-tidy'nin başlık-koruma tanımlayıcıları ve eksik
+`default` gibi bulguları biçimseldir, kusur değil.
+
+**Kabul kanıtı.** Yeni `tests/test_parse.c:test_route()` (önceden test
+edilmeyen `parse_route`'u kapsar; §6'daki fall-through reddini de sınar).
+`make check` 14/14 (GCC ve clang, `WERROR`), `make check-live` 20/20,
+ASan/UBSan/LSan temiz, `fuzz_opts`/`fuzz_apd` 3'er milyon koşu crash'siz,
+man sayfası uyarısız.
+
+**Geri alma koşulu.** Yok; düzeltmeler davranışı korur veya yalnız hatalı
+yol / debug çıktısını onarır.

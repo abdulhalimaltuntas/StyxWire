@@ -154,6 +154,41 @@ static void test_apd_send(void)
 	CHECK(cfg.apd_send == NULL);
 }
 
+/* parse_route() (--lsrr/--ssrr) was previously untested; the option value
+ * is "[ptr:]IP1[/IP2...]". These pin the layout it writes and, importantly,
+ * the rejection of a malformed pointer prefix -- the fall-through path in
+ * the ':' case that reaches the "invalid route syntax" default. */
+static void test_route(void)
+{
+	TEST("parse: --lsrr single hop");
+	CHECK_EQ_INT(parse("--lsrr", "1.2.3.4", "10.0.0.1", NULL), HPING_PARSE_OK);
+	CHECK_EQ_INT(cfg.opt_lsrr, TRUE);
+	CHECK_EQ_INT(cfg.lsr[0], 131);			/* LSRR option type */
+	CHECK_EQ_INT(cfg.lsr_length, 7);		/* 4*1 + 3 */
+	CHECK_EQ_INT(cfg.lsr[1], 7);			/* length byte */
+
+	TEST("parse: --lsrr two hops");
+	CHECK_EQ_INT(parse("--lsrr", "1.2.3.4/5.6.7.8", "10.0.0.1", NULL), HPING_PARSE_OK);
+	CHECK_EQ_INT(cfg.lsr_length, 11);		/* 4*2 + 3 */
+
+	TEST("parse: --lsrr with a pointer prefix");
+	CHECK_EQ_INT(parse("--lsrr", "8:1.2.3.4", "10.0.0.1", NULL), HPING_PARSE_OK);
+	CHECK_EQ_INT(cfg.lsr[2], 8);			/* the route pointer */
+
+	TEST("parse: --ssrr single hop");
+	CHECK_EQ_INT(parse("--ssrr", "1.2.3.4", "10.0.0.1", NULL), HPING_PARSE_OK);
+	CHECK_EQ_INT(cfg.opt_ssrr, TRUE);
+	CHECK_EQ_INT(cfg.ssr[0], 137);			/* SSRR option type */
+
+	/* rejected: a pointer prefix >= 256 falls through to the error */
+	TEST("parse: --lsrr rejects an out-of-range pointer prefix");
+	CHECK_EQ_INT(parse("--lsrr", "999:1.2.3.4", "10.0.0.1", NULL), HPING_PARSE_ERROR);
+
+	/* rejected: junk that is neither an IP nor a valid prefix */
+	TEST("parse: --lsrr rejects malformed syntax");
+	CHECK_EQ_INT(parse("--lsrr", "@", "10.0.0.1", NULL), HPING_PARSE_ERROR);
+}
+
 int main(void)
 {
 	hping_config_init(&cfg);
@@ -162,5 +197,6 @@ int main(void)
 	test_basic();
 	test_help_and_errors();
 	test_apd_send();
+	test_route();
 	return tu_report("test_parse");
 }

@@ -59,7 +59,7 @@ int get_if_name(void)
 			known_output_if = 1;
 			if (cfg.opt_debug)
 				printf("DEBUG: Output interface address: %s\n",
-					inet_ntoa(sa.sin_addr));
+					inet_ntoa(output_if_addr.sin_addr));
 		} else {
 			fprintf(stderr, "Warning: Unable to guess the output "
 					"interface\n");
@@ -322,6 +322,11 @@ int get_output_if(struct sockaddr_in *dest, struct sockaddr_in *ifip)
  
 	memset(&iface_out, 0, sizeof(iface_out));
 	sock_rt = socket(AF_INET, SOCK_DGRAM, 0 );
+	if (sock_rt == -1) {
+		if (cfg.opt_debug)
+			perror("DEBUG: [get_output_if] socket");
+		return -1;
+	}
 
 	dest->sin_port = htons(11111);
 	if (setsockopt(sock_rt, SOL_SOCKET, SO_BROADCAST, &on, sizeof(on))

@@ -560,7 +560,6 @@ int ars_d_build(struct ars_packet *pkt, char *t);
 int ars_valid_layer(int layer);
 int ars_get_iface_list(struct ars_iface *iface, size_t *isize);
 int ars_get_iface(char *name, struct ars_iface *i);
-int ars_valid_layer(int layer);
 int ars_remove_layer(struct ars_packet *pkt, int layer);
 
 /* IPv6 split/serialize (split.c, rapd.c) */

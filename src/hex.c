@@ -24,7 +24,10 @@ static unsigned char hval[256] = {
 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 
 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, };
 
-static char hcharset[16] = "0123456789abcdef";
+/* the 16 hex digits, indexed 0..15; declared as a sized string (the NUL is
+ * included, so the array is 17 bytes) only to keep it a valid C string --
+ * it is only ever indexed, never printed. */
+static const char hcharset[] = "0123456789abcdef";
 
 /* Convert hex data in the string pointed by 'hexstr' in binary, and
  * write the result of the conversion to 'dest'.
