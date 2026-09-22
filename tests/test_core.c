@@ -1164,6 +1164,152 @@ static void test_send_tcp_vectors(void)
 	CHECK_EQ_INT(cfg.dst_port, 81);			/* stepped */
 }
 
+/* send_udp() wire-format characterization -- same contract as the TCP
+ * vectors above (KK-5 / B4). send_udp() builds the UDP segment; the IP
+ * header is added later. The checksum is verified against an independent
+ * pseudo-header reference. */
+static void test_send_udp_vectors(void)
+{
+	unsigned char *p = stub_last_packet;
+	unsigned char seg[64];
+	unsigned short ref, got;
+
+	/* 1. plain UDP, no data */
+	TEST("send_udp: header only");
+	tcp_vec_setup();
+	CHECK_EQ_INT(send_udp(), 0);
+	CHECK_EQ_INT(stub_last_size, 8);
+	CHECK_EQ_INT((p[0] << 8) | p[1], 1234);		/* sport */
+	CHECK_EQ_INT((p[2] << 8) | p[3], 80);		/* dport */
+	CHECK_EQ_INT((p[4] << 8) | p[5], 8);		/* length */
+	memcpy(seg, p, 8); seg[6] = seg[7] = 0;
+	memcpy(&got, p + 6, 2);
+	CHECK_EQ_INT(got, tu_l4_cksum(SADDR, DADDR, 17, seg, 8));
+	CHECK_EQ_INT(ctx.sequence, 1);
+	CHECK_EQ_INT(ctx.src_port, (1 + 1234) % 65536);
+
+	/* 2. UDP with a payload */
+	TEST("send_udp: with data payload");
+	tcp_vec_setup();
+	cfg.data_size = 4;
+	CHECK_EQ_INT(send_udp(), 0);
+	CHECK_EQ_INT(stub_last_size, 12);
+	CHECK_EQ_INT((p[4] << 8) | p[5], 12);		/* length = 8 + 4 */
+	CHECK_EQ_INT(p[8], 'X'); CHECK_EQ_INT(p[11], 'X');
+	memcpy(seg, p, 12); seg[6] = seg[7] = 0;
+	memcpy(&got, p + 6, 2);
+	CHECK_EQ_INT(got, tu_l4_cksum(SADDR, DADDR, 17, seg, 12));
+
+	/* 3. --badcksum corrupts the checksum the same way as for TCP */
+	TEST("send_udp: --badcksum corrupts the checksum deterministically");
+	tcp_vec_setup();
+	cfg.opt_badcksum = TRUE;
+	CHECK_EQ_INT(send_udp(), 0);
+	memcpy(seg, p, 8); seg[6] = seg[7] = 0;
+	ref = tu_l4_cksum(SADDR, DADDR, 17, seg, 8);
+	memcpy(&got, p + 6, 2);
+	CHECK_EQ_INT(got, (unsigned short) (ref ^ 0x5555));
+	CHECK(got != ref);
+
+	/* 4. --keep-still / --force-incdport side effects */
+	TEST("send_udp: --keep-still and --force-incdport side effects");
+	tcp_vec_setup();
+	cfg.opt_keepstill      = TRUE;
+	cfg.opt_force_incdport = TRUE;
+	CHECK_EQ_INT(send_udp(), 0);
+	CHECK_EQ_INT(ctx.src_port, 1234);		/* frozen */
+	CHECK_EQ_INT(cfg.dst_port, 81);			/* stepped */
+}
+
+/* send_icmp_echo/timestamp/address() wire-format characterization (KK-5 /
+ * B4). ICMPv4 checksums cover the ICMP message only (no pseudo-header), so
+ * a valid packet checksums to zero; every other byte is pinned, which fixes
+ * the checksum bytes too. The id is getpid()&0xffff and the sequence is a
+ * file-static counter, both host byte order as the historical code wrote
+ * them. send_icmp_other() is characterized separately (test_send_icmp_other)
+ * and is deliberately NOT moved onto ARS: its quoted datagram carries the
+ * original packet's framing, whose inner UDP checksum does not follow this
+ * packet's layer layout (KK-16). */
+static long long fixed_wall_us_val;
+static long long fixed_wall_us(void *arg) { (void)arg; return fixed_wall_us_val; }
+
+static void test_send_icmp_vectors(void)
+{
+	extern int send_icmp_echo(void);
+	extern int send_icmp_timestamp(void);
+	extern int send_icmp_address(void);
+	unsigned char *p = stub_last_packet;
+	unsigned short id16, seq16;
+	int expect_id = getpid() & 0xffff;
+
+	/* 1. echo request: type 8, id = pid, valid checksum, no pseudo-header */
+	TEST("send_icmp_echo: echo request header");
+	tcp_vec_setup();
+	cfg.opt_icmptype = ICMP_ECHO;
+	cfg.opt_icmpcode = 0;
+	cfg.icmp_cksum   = -1;
+	CHECK_EQ_INT(send_icmp_echo(), 0);
+	CHECK_EQ_INT(stub_last_size, 8);
+	CHECK_EQ_INT(p[0], ICMP_ECHO);			/* type */
+	CHECK_EQ_INT(p[1], 0);				/* code */
+	memcpy(&id16, p + 4, 2);
+	CHECK_EQ_INT(id16, expect_id);			/* id = pid */
+	CHECK_EQ_INT(tu_cksum(p, 8), 0);		/* checksum valid */
+
+	/* 2. echo with a payload, and the sequence steps by one */
+	TEST("send_icmp_echo: payload and sequence increment");
+	memcpy(&seq16, p + 6, 2);			/* sequence from call 1 */
+	tcp_vec_setup();
+	cfg.opt_icmptype = ICMP_ECHO;
+	cfg.icmp_cksum   = -1;
+	cfg.data_size    = 4;
+	CHECK_EQ_INT(send_icmp_echo(), 0);
+	CHECK_EQ_INT(stub_last_size, 12);
+	{ unsigned short s2; memcpy(&s2, p + 6, 2);
+	  CHECK_EQ_INT(s2, (unsigned short)(seq16 + 1)); }
+	CHECK_EQ_INT(p[8], 'X'); CHECK_EQ_INT(p[11], 'X');
+	CHECK_EQ_INT(tu_cksum(p, 12), 0);
+
+	/* 3. --icmp-cksum forces a specific (wrong) checksum: preserve it */
+	TEST("send_icmp_echo: forced --icmp-cksum is kept verbatim");
+	tcp_vec_setup();
+	cfg.opt_icmptype = ICMP_ECHO;
+	cfg.icmp_cksum   = 0x1234;
+	CHECK_EQ_INT(send_icmp_echo(), 0);
+	{ unsigned short ck; memcpy(&ck, p + 2, 2);
+	  CHECK_EQ_INT(ck, 0x1234); }
+
+	/* 4. timestamp request: type 13, orig = ms since midnight UT (from the
+	 *    injected wall clock), recv/tran zero, 20 bytes total */
+	TEST("send_icmp_timestamp: originate stamp from the wall clock");
+	tcp_vec_setup();
+	fixed_wall_us_val = 3661LL * 1000000LL + 500000LL;	/* 01:01:01.5 UT */
+	hping_clock_set(NULL, fixed_wall_us, NULL);
+	cfg.opt_icmptype = ICMP_TIMESTAMP;
+	cfg.icmp_cksum   = -1;
+	CHECK_EQ_INT(send_icmp_timestamp(), 0);
+	CHECK_EQ_INT(stub_last_size, 8 + 12);
+	CHECK_EQ_INT(p[0], ICMP_TIMESTAMP);
+	{ unsigned int orig; memcpy(&orig, p + 8, 4);
+	  CHECK_EQ_INT(ntohl(orig), 3661 * 1000 + 500); }	/* ms since midnight */
+	CHECK_EQ_INT((p[12]|p[13]|p[14]|p[15]), 0);		/* recv = 0 */
+	CHECK_EQ_INT((p[16]|p[17]|p[18]|p[19]), 0);		/* tran = 0 */
+	CHECK_EQ_INT(tu_cksum(p, 20), 0);
+	hping_clock_set(NULL, NULL, NULL);
+	hping_clock_system(&ctx);
+
+	/* 5. address-mask request: type 17, four zero bytes, 12 bytes total */
+	TEST("send_icmp_address: address-mask request");
+	tcp_vec_setup();
+	cfg.opt_icmptype = ICMP_ADDRESS;
+	cfg.icmp_cksum   = -1;
+	CHECK_EQ_INT(send_icmp_address(), 0);
+	CHECK_EQ_INT(stub_last_size, 12);
+	CHECK_EQ_INT(p[0], ICMP_ADDRESS);
+	CHECK_EQ_INT((p[8]|p[9]|p[10]|p[11]), 0);		/* mask = 0 */
+	CHECK_EQ_INT(tu_cksum(p, 12), 0);
+}
+
 int main(void)
 {
 	hping_config_init(&cfg);
@@ -1177,6 +1323,8 @@ int main(void)
 	test_rand_dest();
 	test_apd_build_vectors();
 	test_send_tcp_vectors();
+	test_send_udp_vectors();
+	test_send_icmp_vectors();
 	test_split_roundtrip();
 	test_split_malformed();
 	test_display_ipopt();

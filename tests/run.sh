@@ -34,6 +34,7 @@ for t in "$@"; do
 done
 run_one "tests/cli.sh" sh tests/cli.sh
 run_one "tests/linklayer.sh" sh tests/linklayer.sh
+run_one "tests/completion.sh" sh tests/completion.sh
 run_one "tests/install.sh" sh tests/install.sh
 run_one "tests/libars.sh" sh tests/libars.sh
 run_one "tests/rcfile.sh" sh tests/rcfile.sh

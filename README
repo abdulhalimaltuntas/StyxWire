@@ -44,6 +44,10 @@ BUILDING AND TESTING
 
 	$ make bench           offline benchmark of the packet engine
 
+	"make install" also installs bash and zsh tab-completion for
+	styxwire (and the hping3 alias); "make styxwire-static" builds a
+	single statically linked binary where the static libraries exist.
+
 	See INSTALL for the details (Tcl on/off, staged installation,
 	sanitizer builds, fuzzing, benchmarking, cross compiling). The
 	development reports for this tree are docs/ASAMA1-RAPORU.md

@@ -161,7 +161,14 @@ check "`printf '%s\n' "$stat" | grep -c '"sent":3'`" 1 "json: sent count"
 check "`printf '%s\n' "$stat" | grep -c '"received":3'`" 1 "json: received count"
 check "`printf '%s\n' "$stat" | grep -c '"loss_percent":0'`" 1 "json: no loss"
 
-# 6. Spoofed source (-a): the packet must still go out, but no reply can
+# 6. UDP to a closed port: the peer's kernel answers ICMP port-unreachable,
+#    which styxwire matches as a reply (exit 0). Exercises the UDP send path.
+out=`timeout 8 "$H" -I "$IFACE" -2 -p 65000 -c 1 "$IP1" 2>&1`; rc=$?
+check "$rc" 0 "udp: exit 0 (ICMP error is a reply)"
+check "`printf '%s\n' "$out" | grep -ci 'ICMP Port Unreachable'`" 1 "udp: port-unreachable from the peer"
+check "`printf '%s\n' "$out" | grep -c '0% packet loss'`" 1 "udp: reply counted"
+
+# 7. Spoofed source (-a): the packet must still go out, but no reply can
 #    match, so received stays 0 and the exit status is 1.
 out=`timeout 8 "$H" -I "$IFACE" -a 10.99.0.55 -S -p 9999 -c 1 "$IP1" 2>&1`; rc=$?
 check "$rc" 1 "spoof: exit 1 (no reply reaches the forged source)"

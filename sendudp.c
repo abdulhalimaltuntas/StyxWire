@@ -20,57 +20,79 @@
 
 #include "hping2.h"
 #include "globals.h"
+#include "ars.h"
 
-/* void hexdumper(unsigned char *packet, int size); */
+/* send_udp() builds the UDP probe through the ARS packet engine (KK-5 / B4),
+ * the same way send_tcp() does: the IP layer is present only so ARS can
+ * source the pseudo-header addresses for the checksum, and the compiled IP
+ * header is discarded (send_ip() prepends the real one). ARS fills the UDP
+ * length and the checksum; --badcksum and the Solaris checksum-bug path are
+ * re-applied by hand, since ars_cksum() does not honour opt_badcksum.
+ * tests/test_core.c:test_send_udp_vectors() pins the bytes. */
 
 int send_udp(void)
 {
-	int rc;
-	int			packet_size;
-	char			*packet, *data;
-	struct myudphdr		*udp;
-	struct pseudohdr *pseudoheader;
+	struct ars_packet	p;
+	struct ars_iphdr	*ip;
+	struct ars_udphdr	*udp;
+	unsigned char		*built = NULL;
+	size_t			built_size, l4len, l4off;
+	int			udp_layer, rc;
 
-	packet_size = UDPHDR_SIZE + cfg.data_size;
-	packet = malloc(PSEUDOHDR_SIZE + packet_size);
-	if (packet == NULL) {
-		perror("[send_udphdr] malloc()");
-		return -1;
-	}
-	pseudoheader = (struct pseudohdr*) packet;
-	udp =  (struct myudphdr*) (packet+PSEUDOHDR_SIZE);
-	data = (char*) (packet+PSEUDOHDR_SIZE+UDPHDR_SIZE);
-	
-	memset(packet, 0, PSEUDOHDR_SIZE+packet_size);
+	ars_init(&p);
 
-	/* udp pseudo header */
-	memcpy(&pseudoheader->saddr, &ctx.local.sin_addr.s_addr, 4);
-	memcpy(&pseudoheader->daddr, &ctx.remote.sin_addr.s_addr, 4);
-	pseudoheader->protocol		= 17; /* udp */
-	pseudoheader->lenght		= htons(packet_size);
+	/* IP layer: only saddr/daddr are read (pseudo-header checksum). */
+	ip = ars_add_iphdr(&p, 0);
+	if (ip == NULL)
+		goto nomem;
+	memcpy(&ip->saddr, &ctx.local.sin_addr.s_addr, 4);
+	memcpy(&ip->daddr, &ctx.remote.sin_addr.s_addr, 4);
+	ip->protocol = 17; /* udp */
 
-	/* udp header */
-	udp->uh_dport	= htons(cfg.dst_port);
-	udp->uh_sport	= htons(ctx.src_port);
-	udp->uh_ulen	= htons(packet_size);
+	/* UDP header (ARS computes uh_ulen and uh_sum) */
+	udp_layer = p.p_layer_nr;
+	udp = ars_add_udphdr(&p, 0);
+	if (udp == NULL)
+		goto nomem;
+	udp->uh_sport = htons(ctx.src_port);
+	udp->uh_dport = htons(cfg.dst_port);
 
 	/* data */
-	data_handler(data, cfg.data_size);
+	if (cfg.data_size) {
+		char *data = ars_add_data(&p, cfg.data_size);
+		if (data == NULL)
+			goto nomem;
+		data_handler(data, cfg.data_size);
+	}
 
-	/* compute checksum */
+	if (ars_compile(&p) != -ARS_OK ||
+	    ars_build_packet(&p, &built, &built_size) != -ARS_OK) {
+		fprintf(stderr, "styxwire: send_udp: %s\n",
+			p.p_error ? p.p_error : "packet build failed");
+		ars_destroy(&p);
+		free(built);
+		return -1;
+	}
+
+	/* the UDP segment is everything past the (discarded) IP header */
+	l4len = ars_relative_size(&p, udp_layer);
+	l4off = built_size - l4len;
+	udp = (struct ars_udphdr *) (built + l4off);
+
+	/* re-apply the deliberately-malformed checksum behaviours */
+	if (cfg.opt_badcksum)
+		udp->uh_sum ^= 0x5555;
 #ifdef STUPID_SOLARIS_CHECKSUM_BUG
-	udp->uh_sum = packet_size;
-#else
-	udp->uh_sum = cksum((__u16*) packet, PSEUDOHDR_SIZE +
-		      packet_size);
+	udp->uh_sum = (u_int16_t) l4len;
 #endif
 
 	/* adds this pkt in delaytable */
 	delaytable_add(ctx.sequence, ctx.src_port, S_SENT);
 
 	/* send packet */
-	rc = send_ip_handler(packet+PSEUDOHDR_SIZE, packet_size);
-	free(packet);
+	rc = send_ip_handler((char*) (built + l4off), (unsigned int) l4len);
+	ars_destroy(&p);
+	free(built);
 
 	ctx.sequence++;	/* next sequence number */
 
@@ -80,4 +102,10 @@ int send_udp(void)
 	if (cfg.opt_force_incdport)
 		cfg.dst_port++;
 	return rc;
+
+nomem:
+	fprintf(stderr, "styxwire: send_udp: %s\n",
+		p.p_error ? p.p_error : "out of memory building the packet");
+	ars_destroy(&p);
+	return -1;
 }

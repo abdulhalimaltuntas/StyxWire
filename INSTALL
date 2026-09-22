@@ -80,8 +80,12 @@ make targets
   make WERROR=1        treat compiler warnings as errors (CI does this)
   make SANITIZE=1 ...  build with ASan/UBSan; combine with check, e.g.
                        make clean && make check SANITIZE=1
-  make install         install into DESTDIR/prefix (see below)
+  make install         install into DESTDIR/prefix (see below), including
+                       the bash and zsh tab-completions
   make uninstall       remove what install created
+  make styxwire-static a single statically linked binary (needs libpcap.a
+                       and, with Tcl, libtcl*.a; many distributions do not
+                       ship those static archives)
   make libars.a        the ARS packet library as a static archive
   make fuzz            build the libFuzzer targets (needs clang), then
                        tests/fuzz_split, tests/fuzz_apd, tests/fuzz_opts
@@ -100,6 +104,10 @@ Installation layout and staging
   mandir/man8/styxwire.8      manual page
   mandir/man8/hping3.8        symlink to it
   datadir/styxwire/lib/*.htcl Tcl example scripts (only with Tcl support)
+  datadir/bash-completion/    bash tab-completion ("styxwire", plus an
+    completions/styxwire      "hping3" symlink to it)
+  datadir/zsh/site-functions/ zsh tab-completion
+    _styxwire
 
   Paths containing spaces are supported (they are quoted in the recipes).
   Nothing is made setuid: run styxwire as root or with the needed
@@ -115,8 +123,10 @@ Test-suite
   tests/linklayer.sh (a pcap fixture per supported link-layer type),
   tests/install.sh (staged install into a temporary directory),
   tests/libars.sh (a program linked against libars.a alone),
-  tests/rcfile.sh (the startup file) and tests/bench --selftest (the
-  benchmark workloads compute what they claim, untimed). All of it runs as an ordinary user without
+  tests/rcfile.sh (the startup file), tests/completion.sh (the shell
+  completions still list exactly the options the binary accepts) and
+  tests/bench --selftest (the benchmark workloads compute what they claim,
+  untimed). All of it runs as an ordinary user without
   opening a socket: packets are crafted in memory or read from pcap
   savefiles written by the tests themselves, and the event loop is driven
   by a fake clock.

@@ -59,6 +59,11 @@ $(PROG): byteorder.h systype.h $(OBJ)
 	@echo
 	@echo "$(PROG) built. Try \`make check', \`make strip', \`make install'"
 
+# Statically linked binary: "make styxwire-static". One self-contained file
+# to drop onto a box without the shared libpcap/Tcl. It needs the static
+# archives (libpcap.a, and libtcl*.a when Tcl is enabled), which many
+# distributions do not ship -- if the link fails with "cannot find -lpcap",
+# that is why; ./configure --no-tcl needs the fewest of them.
 $(PROG)-static: byteorder.h systype.h $(OBJ)
 	$(CC) -static $(ALL_CFLAGS) $(ALL_LDFLAGS) -o $(PROG)-static $(OBJ) $(ALL_LDLIBS) -ldl
 
@@ -225,14 +230,25 @@ install: $(PROG)
 	@if [ -n "$(USE_TCL)" ]; then \
 		$(INSTALL) -d "$(DESTDIR)$(datadir)/styxwire/lib"; \
 		for f in lib/*.htcl lib/*.tcl; do \
+			[ -f "$$f" ] || continue; \
 			$(INSTALL) -m 644 "$$f" "$(DESTDIR)$(datadir)/styxwire/lib/"; \
 		done; \
 	fi
+	@# shell tab-completion (bash-completion and zsh site-functions). The
+	@# completion knows the compatibility names too, so install one copy
+	@# under each.
+	$(INSTALL) -d "$(DESTDIR)$(datadir)/bash-completion/completions"
+	$(INSTALL) -m 644 completion/styxwire.bash "$(DESTDIR)$(datadir)/bash-completion/completions/styxwire"
+	ln -sf styxwire "$(DESTDIR)$(datadir)/bash-completion/completions/hping3"
+	$(INSTALL) -d "$(DESTDIR)$(datadir)/zsh/site-functions"
+	$(INSTALL) -m 644 completion/styxwire.zsh "$(DESTDIR)$(datadir)/zsh/site-functions/_styxwire"
 
 uninstall:
 	rm -f "$(DESTDIR)$(sbindir)/$(PROG)" "$(DESTDIR)$(sbindir)/hping3" "$(DESTDIR)$(sbindir)/hping2" "$(DESTDIR)$(sbindir)/hping"
 	rm -f "$(DESTDIR)$(mandir)/man8/styxwire.8" "$(DESTDIR)$(mandir)/man8/hping3.8"
 	rm -rf "$(DESTDIR)$(datadir)/styxwire"
+	rm -f "$(DESTDIR)$(datadir)/bash-completion/completions/styxwire" "$(DESTDIR)$(datadir)/bash-completion/completions/hping3"
+	rm -f "$(DESTDIR)$(datadir)/zsh/site-functions/_styxwire"
 
 strip: $(PROG)
 	@ls -l ./$(PROG)

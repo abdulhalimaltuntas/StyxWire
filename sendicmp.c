@@ -22,6 +22,14 @@
 
 #include "hping2.h"
 #include "globals.h"
+#include "ars.h"
+
+/* send_icmp_echo/timestamp/address() build through the ARS packet engine
+ * (KK-5 / B4). ICMPv4 has no pseudo-header, so ARS checksums the message
+ * only; a forced --icmp-cksum is kept verbatim (ARS_TAKE_ICMP_CKSUM).
+ * send_icmp_other() stays hand-built on purpose: its quoted datagram keeps
+ * the original packet's framing, whose inner UDP checksum does not follow
+ * this packet's ARS layer layout (KK-16). tests/test_core.c pins the bytes. */
 
 static int _icmp_seq = 0;
 
@@ -74,35 +82,38 @@ int send_icmp(void)
 
 int send_icmp_echo(void)
 {
-	int rc;
-	char *packet, *data;
-	struct myicmphdr *icmp;
+	struct ars_packet	p;
+	struct ars_icmphdr	*icmp;
+	unsigned char		*built = NULL;
+	size_t			size;
+	int			rc;
 
-	packet = malloc(ICMPHDR_SIZE + cfg.data_size);
-	if (packet == NULL) {
-		perror("[send_icmp] malloc");
-		return -1;
-	}
-
-	memset(packet, 0, ICMPHDR_SIZE + cfg.data_size);
-
-	icmp = (struct myicmphdr*) packet;
-	data = packet + ICMPHDR_SIZE;
-
-	/* fill icmp hdr */
-	icmp->type = cfg.opt_icmptype;	/* echo replay or echo request */
+	ars_init(&p);
+	icmp = ars_add_icmphdr(&p, 0);
+	if (icmp == NULL)
+		goto err;
+	icmp->type = cfg.opt_icmptype;	/* echo reply or echo request */
 	icmp->code = cfg.opt_icmpcode;	/* should be indifferent */
-	icmp->checksum = 0;
 	icmp->un.echo.id = getpid() & 0xffff;
 	icmp->un.echo.sequence = _icmp_seq;
 
 	/* data */
-	data_handler(data, cfg.data_size);
+	if (cfg.data_size) {
+		char *data = ars_add_data(&p, cfg.data_size);
+		if (data == NULL)
+			goto err;
+		data_handler(data, cfg.data_size);
+	}
 
-	/* icmp checksum */
-	if (cfg.icmp_cksum == -1)
-		icmp->checksum = cksum((u_short*)packet, ICMPHDR_SIZE + cfg.data_size);
-	else
+	/* a forced --icmp-cksum is kept verbatim; otherwise ARS computes it */
+	if (cfg.icmp_cksum != -1)
+		ars_set_flags(&p, 0, ARS_TAKE_ICMP_CKSUM);
+
+	if (ars_compile(&p) != -ARS_OK ||
+	    ars_build_packet(&p, &built, &size) != -ARS_OK)
+		goto err;
+	icmp = (struct ars_icmphdr *) built;
+	if (cfg.icmp_cksum != -1)
 		icmp->checksum = cfg.icmp_cksum;
 
 	/* adds this pkt in delaytable */
@@ -110,45 +121,53 @@ int send_icmp_echo(void)
 		delaytable_add(_icmp_seq, 0, S_SENT);
 
 	/* send packet */
-	rc = send_ip_handler(packet, ICMPHDR_SIZE + cfg.data_size);
-	free (packet);
+	rc = send_ip_handler((char*) built, (unsigned int) size);
+	ars_destroy(&p);
+	free(built);
 
 	_icmp_seq++;
 	return rc;
+
+err:
+	fprintf(stderr, "styxwire: send_icmp: %s\n",
+		p.p_error ? p.p_error : "could not build the packet");
+	ars_destroy(&p);
+	free(built);
+	return -1;
 }
 
 int send_icmp_timestamp(void)
 {
-	int rc;
-	char *packet;
-	struct myicmphdr *icmp;
-	struct icmp_tstamp_data *tstamp_data;
+	struct ars_packet	p;
+	struct ars_icmphdr	*icmp;
+	struct icmp_tstamp_data	*tstamp_data;
+	unsigned char		*built = NULL;
+	size_t			size;
+	int			rc;
 
-	packet = malloc(ICMPHDR_SIZE + sizeof(struct icmp_tstamp_data));
-	if (packet == NULL) {
-		perror("[send_icmp] malloc");
-		return -1;
-	}
-
-	memset(packet, 0, ICMPHDR_SIZE + sizeof(struct icmp_tstamp_data));
-
-	icmp = (struct myicmphdr*) packet;
-	tstamp_data = (struct icmp_tstamp_data*) (packet + ICMPHDR_SIZE);
-
-	/* fill icmp hdr */
-	icmp->type = cfg.opt_icmptype;	/* echo replay or echo request */
+	ars_init(&p);
+	icmp = ars_add_icmphdr(&p, 0);
+	if (icmp == NULL)
+		goto err;
+	icmp->type = cfg.opt_icmptype;	/* timestamp request or reply */
 	icmp->code = 0;
-	icmp->checksum = 0;
 	icmp->un.echo.id = getpid() & 0xffff;
 	icmp->un.echo.sequence = _icmp_seq;
-	tstamp_data->orig = htonl(get_midnight_ut_ms());
-	tstamp_data->recv = tstamp_data->tran = 0;
 
-	/* icmp checksum */
-	if (cfg.icmp_cksum == -1)
-		icmp->checksum = cksum((u_short*)packet, ICMPHDR_SIZE +
-				sizeof(struct icmp_tstamp_data));
-	else
+	/* originate stamp; recv and tran stay zero (data layer is zeroed) */
+	tstamp_data = ars_add_data(&p, sizeof(struct icmp_tstamp_data));
+	if (tstamp_data == NULL)
+		goto err;
+	tstamp_data->orig = htonl(get_midnight_ut_ms());
+
+	if (cfg.icmp_cksum != -1)
+		ars_set_flags(&p, 0, ARS_TAKE_ICMP_CKSUM);
+
+	if (ars_compile(&p) != -ARS_OK ||
+	    ars_build_packet(&p, &built, &size) != -ARS_OK)
+		goto err;
+	icmp = (struct ars_icmphdr *) built;
+	if (cfg.icmp_cksum != -1)
 		icmp->checksum = cfg.icmp_cksum;
 
 	/* adds this pkt in delaytable */
@@ -156,53 +175,72 @@ int send_icmp_timestamp(void)
 		delaytable_add(_icmp_seq, 0, S_SENT);
 
 	/* send packet */
-	rc = send_ip_handler(packet, ICMPHDR_SIZE + sizeof(struct icmp_tstamp_data));
-	free (packet);
+	rc = send_ip_handler((char*) built, (unsigned int) size);
+	ars_destroy(&p);
+	free(built);
 
 	_icmp_seq++;
 	return rc;
+
+err:
+	fprintf(stderr, "styxwire: send_icmp: %s\n",
+		p.p_error ? p.p_error : "could not build the packet");
+	ars_destroy(&p);
+	free(built);
+	return -1;
 }
 
 int send_icmp_address(void)
 {
-	int rc;
-	char *packet;
-	struct myicmphdr *icmp;
+	struct ars_packet	p;
+	struct ars_icmphdr	*icmp;
+	unsigned char		*built = NULL;
+	size_t			size;
+	int			rc;
 
-	packet = malloc(ICMPHDR_SIZE + 4);
-	if (packet == NULL) {
-		perror("[send_icmp] malloc");
-		return -1;
-	}
-
-	memset(packet, 0, ICMPHDR_SIZE + 4);
-
-	icmp = (struct myicmphdr*) packet;
-
-	/* fill icmp hdr */
-	icmp->type = cfg.opt_icmptype;	/* echo replay or echo request */
+	ars_init(&p);
+	icmp = ars_add_icmphdr(&p, 0);
+	if (icmp == NULL)
+		goto err;
+	icmp->type = cfg.opt_icmptype;	/* address-mask request or reply */
 	icmp->code = 0;
-	icmp->checksum = 0;
 	icmp->un.echo.id = getpid() & 0xffff;
 	icmp->un.echo.sequence = _icmp_seq;
-	memset(packet+ICMPHDR_SIZE, 0, 4);
 
-	/* icmp checksum */
-	if (cfg.icmp_cksum == -1)
-		icmp->checksum = cksum((u_short*)packet, ICMPHDR_SIZE + 4);
-	else
+	/* four zero bytes: the address mask (data layer is already zeroed) */
+	if (ars_add_data(&p, 4) == NULL)
+		goto err;
+
+	if (cfg.icmp_cksum != -1)
+		ars_set_flags(&p, 0, ARS_TAKE_ICMP_CKSUM);
+
+	if (ars_compile(&p) != -ARS_OK ||
+	    ars_build_packet(&p, &built, &size) != -ARS_OK)
+		goto err;
+	icmp = (struct ars_icmphdr *) built;
+	if (cfg.icmp_cksum != -1)
 		icmp->checksum = cfg.icmp_cksum;
 
-	/* adds this pkt in delaytable */
+	/* adds this pkt in delaytable -- historical condition: it tests
+	 * ICMP_TIMESTAMP, not ICMP_ADDRESS, so address probes were never
+	 * tracked; kept verbatim (behaviour-preserving refactor). */
 	if (cfg.opt_icmptype == ICMP_TIMESTAMP)
 		delaytable_add(_icmp_seq, 0, S_SENT);
 
 	/* send packet */
-	rc = send_ip_handler(packet, ICMPHDR_SIZE + 4);
-	free (packet);
+	rc = send_ip_handler((char*) built, (unsigned int) size);
+	ars_destroy(&p);
+	free(built);
 
 	_icmp_seq++;
 	return rc;
+
+err:
+	fprintf(stderr, "styxwire: send_icmp: %s\n",
+		p.p_error ? p.p_error : "could not build the packet");
+	ars_destroy(&p);
+	free(built);
+	return -1;
 }
 
 int send_icmp_other(void)

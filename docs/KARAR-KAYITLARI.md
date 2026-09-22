@@ -349,3 +349,71 @@ IPv6 gönderimi kararla reddedilir (KK-11), bu birleştirmenin konusu değil.
 
 **Geri alma koşulu.** Yok; davranış bayt düzeyinde korundu. Bir regresyon
 çıkarsa karakterizasyon vektörü yakalar.
+
+## KK-16 — B4 tamamlandı: UDP ve ICMP de ARS'ye taşındı; `send_icmp_other` bilinçli olarak dışarıda
+
+**Bağlam.** KK-15 TCP'yi ARS'ye taşımıştı. Geriye `sendudp.c` ve
+`sendicmp.c` kalmıştı.
+
+**Karar.** `send_udp()` ve `send_icmp_echo()/send_icmp_timestamp()/
+send_icmp_address()` ARS ile kurulur. UDP'de IP katmanı yalnız pseudo-header
+adresleri içindir ve atılır; uzunluk (`uh_ulen`) ve checksum'ı ARS hesaplar.
+ICMPv4'te pseudo-header yoktur, `ars_compiler_icmp` yalnız mesajı toplar —
+tarihsel `cksum()` ile aynı sonuç.
+
+**`send_icmp_other()` taşınmadı — teknik gerekçe.** ICMP hata mesajının
+*alıntılanan* datagramı, bu paketin katman düzenine değil **orijinal**
+paketin çerçevelemesine uyar: eski kodda alıntılanan UDP checksum'ı yalnız
+8 baytlık UDP başlığını kapsar ve pseudo-header uzunluğu alıntılanan IP'nin
+`tot_len`'idir (28); ARS ise UDP katmanından sonraki her şeyi (ICMP'nin
+16 baytlık veri dolgusunu da) toplardı. Yani ARS'ye zorlamak checksum'ı
+bastırıp (`ARS_TAKE_UDP_CKSUM`) elle hesaplamak demekti — tekrar zaten
+kalkmazdı. Elle kurulmuş hâlde bırakıldı; davranışı
+`tests/test_core.c:test_send_icmp_other()` sabitler.
+
+**`sendip.c` / `sendhcmp.c` kapsam dışı.** `sendip.c` dış IP başlığını kuran,
+raw sokete yazan ve `--dry-run` çıktısını üreten **tek ve ortak** yoldur
+(`ip->check = 0`, çekirdek doldurur; BSD/Linux bayt sırası farkları,
+`--safe` id artışı). ARS ile çoğaltma değil; taşımak fayda getirmeden risk
+eklerdi. `sendhcmp.c` listen-mode HCMP'ye özgüdür.
+
+**Kabul kanıtı.** Önce mevcut çıktılar bayt bayt sabitlendi
+(`test_send_udp_vectors` 20, `test_send_icmp_vectors` 26 kontrol; ICMP'de
+paketin tamamı checksum'landığında sıfıra inmelidir, diğer tüm baytlar
+sabitlenir). Vektörler eski kodda geçti, ARS'ye geçişten sonra
+**değişmeden** geçti (520/520). Ayırt edicilik: UDP badcksum XOR'u
+kaldırılınca 2, ICMP zorlanmış checksum'ı kaldırılınca 1 kontrol düştü.
+Canlı yol `make check-live` ile 20/20 (UDP kontrolü eklendi: kapalı porta
+UDP → ICMP port unreachable).
+
+**Bu sırada bulunan iki gerçek kusur (düzeltildi).**
+1. `make install`, `lib/*.tcl` hiçbir dosyayla eşleşmediğinde globu düz
+   metin olarak `install`'a verip **başarısız oluyordu** (lib'de yalnız
+   `.htcl` var). `[ -f "$f" ] || continue` eklendi.
+2. Bunu `tests/install.sh` yakalayamıyordu: `check "[ \$? -eq 0 ]"`
+   dizgesi `check()` içinde değerlendiriliyor, orada `$?` artık make'in
+   değil `n=$((n+1))`'in durumu (hep 0). Üç kontrol de **hiçbir zaman
+   doğrulamıyordu**. Durum artık çağrı yerinde `rc=$?` ile yakalanıyor;
+   kusur geri konulduğunda test düşüyor (doğrulandı).
+
+**Geri alma koşulu.** Yok; davranış bayt düzeyinde korundu.
+
+## KK-17 — Kabuk tamamlama ve statik ikili
+
+**Karar.** `completion/styxwire.bash` ve `completion/styxwire.zsh` eklendi,
+`make install` bunları `datadir/bash-completion/completions/` ve
+`datadir/zsh/site-functions/` altına kurar (hping3 için de bağ).
+
+**Sürüklenmeye karşı.** Tamamlama dosyalarındaki uzun seçenek listesi
+`tests/completion.sh` ile ikilinin kendi tablosuna
+(`parseoptions.c:hping_optlist`) karşı **iki yönlü** karşılaştırılır: yeni
+bir `--seçenek` tamamlamaya eklenmeden, kaldırılan bir seçenek tamamlamadan
+silinmeden `make check` geçmez. Test `LC_ALL=C` kullanır — `[a-z0-9-]`
+aralıkları ve `sort` sıralaması yerele bağlıdır (tr_TR'de `grep -o`
+belirteçleri bozuyordu; bu bizzat yaşandı).
+
+**Statik ikili.** `make styxwire-static` hedefi **zaten vardı**
+(`$(PROG)-static`), yalnız belgesizdi; açıklama eklendi. Bu makinede
+bağlanamıyor: `libpcap.a` kurulu değil (`ld: -lpcap bulunamadı … have you
+installed the static version of the pcap library ?`). Hedef doğru, ortam
+eksik — doğrulanmamış olarak işaretlenir.

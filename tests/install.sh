@@ -21,7 +21,11 @@ stage=`mktemp -d "${TMPDIR:-/tmp}/hping stage.XXXXXX"` || exit 1
 before=`ls -la . docs lib tests 2>/dev/null | md5sum`
 
 make -s install DESTDIR="$stage" >/dev/null 2>&1
-check "[ \$? -eq 0 ]" "make install DESTDIR exits 0"
+rc=$?
+# NOTE: $? must be captured here and expanded into the check string. Passing
+# a literal '[ $? -eq 0 ]' makes check() evaluate $? after its own commands,
+# where it is always 0 -- that bug hid a genuine "make install" failure.
+check "[ $rc -eq 0 ]" "make install DESTDIR exits 0"
 sbin=`make -s -f Makefile -p 2>/dev/null | sed -n 's/^sbindir = //p' | head -1`
 man=`make -s -f Makefile -p 2>/dev/null | sed -n 's/^mandir = //p' | head -1`
 check "[ -x \"$stage$sbin/styxwire\" ]" "styxwire installed in sbindir"
@@ -35,15 +39,25 @@ check "\"$stage$sbin/styxwire\" --version >/dev/null 2>&1" "installed binary run
 check "\"$stage$sbin/hping3\" --version >/dev/null 2>&1" "hping3 symlink runs"
 check "\"$stage$sbin/hping2\" --version >/dev/null 2>&1" "symlink runs"
 
+# shell completions (completion/styxwire.{bash,zsh})
+data=`make -s -f Makefile -p 2>/dev/null | sed -n 's/^datadir = //p' | head -1`
+check "[ -f \"$stage$data/bash-completion/completions/styxwire\" ]" "bash completion installed"
+check "[ -L \"$stage$data/bash-completion/completions/hping3\" ]" "bash completion hping3 alias"
+check "[ -f \"$stage$data/zsh/site-functions/_styxwire\" ]" "zsh completion installed"
+
 # second install must succeed (ln -sf, no 'file exists' errors)
 make -s install DESTDIR="$stage" >/dev/null 2>&1
-check "[ \$? -eq 0 ]" "second make install is idempotent"
+rc=$?
+check "[ $rc -eq 0 ]" "second make install is idempotent"
 
 make -s uninstall DESTDIR="$stage" >/dev/null 2>&1
-check "[ \$? -eq 0 ]" "make uninstall exits 0"
+rc=$?
+check "[ $rc -eq 0 ]" "make uninstall exits 0"
 check "[ ! -e \"$stage$sbin/styxwire\" ]" "uninstall removed the binary"
 check "[ ! -e \"$stage$sbin/hping3\" ]" "uninstall removed the symlinks"
 check "[ ! -e \"$stage$man/man8/styxwire.8\" ]" "uninstall removed the man page"
+check "[ ! -e \"$stage$data/bash-completion/completions/styxwire\" ]" "uninstall removed the bash completion"
+check "[ ! -e \"$stage$data/zsh/site-functions/_styxwire\" ]" "uninstall removed the zsh completion"
 
 after=`ls -la . docs lib tests 2>/dev/null | md5sum`
 check "[ \"$before\" = \"$after\" ]" "source tree untouched by install/uninstall"
