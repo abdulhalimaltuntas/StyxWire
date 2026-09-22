@@ -176,7 +176,7 @@ then
 	BYTEORDER=macro
 else
 	echo "building byteorder probe..."
-	$CC $CFLAGS -o "$TMPDIR_CFG/byteorder" byteorder.c || die "cannot build byteorder.c"
+	$CC $CFLAGS -o "$TMPDIR_CFG/byteorder" src/byteorder.c || die "cannot build src/byteorder.c"
 	BYTEORDER=`"$TMPDIR_CFG/byteorder" -m` || die "cannot run the byteorder probe (cross compiling? set a compiler that defines __BYTE_ORDER__)"
 	case $BYTEORDER in
 	__LITTLE_ENDIAN_BITFIELD|__BIG_ENDIAN_BITFIELD) ;;
@@ -434,7 +434,7 @@ EOF
 # dependencies
 # ---------------------------------------------------------------------------
 echo "creating dependences..."
-$CC $CPPFLAGS $DEFS $PCAP_CFLAGS $TCL_INC $USE_TCL -MM *.c > .depend || die "cannot generate .depend"
+$CC -I. -Isrc $CPPFLAGS $DEFS $PCAP_CFLAGS $TCL_INC $USE_TCL -MM src/*.c > .depend || die "cannot generate .depend"
 
 cleanup
 

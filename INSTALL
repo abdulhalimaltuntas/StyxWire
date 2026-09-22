@@ -110,8 +110,10 @@ Installation layout and staging
     _styxwire
 
   Paths containing spaces are supported (they are quoted in the recipes).
-  Nothing is made setuid: run styxwire as root or with the needed
-  capabilities. See the README about the risks of setuid installations.
+  Nothing is made setuid: run styxwire as root or grant it only the
+  capability it needs, e.g. setcap cap_net_raw+ep on the installed binary.
+  A setuid-root install would let any local user craft and send arbitrary
+  packets, so it is avoided on purpose.
 
 Test-suite
 ----------

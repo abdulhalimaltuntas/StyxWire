@@ -417,3 +417,41 @@ belirteçleri bozuyordu; bu bizzat yaşandı).
 bağlanamıyor: `libpcap.a` kurulu değil (`ld: -lpcap bulunamadı … have you
 installed the static version of the pcap library ?`). Hedef doğru, ortam
 eksik — doğrulanmamış olarak işaretlenir.
+
+## KK-18 — Kaynak ağacı `src/` altına toplandı, profesyonel README.md
+
+**Bağlam.** Depo kökü düzdü: 60 `.c` + 16 `.h` kaynak, meta dosyalar ve
+üretilen artefaktlar aynı yerdeydi. Daha derli, GitHub'da profesyonel görünen
+bir düzen istendi.
+
+**Karar.**
+- Tüm izlenen `.c`/`.h` kaynak `src/` altına taşındı (`git mv`, geçmiş
+  korunur). Üretilen `byteorder.h`/`systype.h` ve nesneler kökte kalır.
+- Makefile: `VPATH = src` (yerleşik `.c.o` kuralı kaynağı src'de bulur,
+  nesneler yine kökte üretilir); `ALL_CPPFLAGS`'a `-I. -Isrc` (testler/fuzz
+  src başlıklarına, kaynak da köke üretilen başlıklara erişir); `.depend`
+  artık `src/*.c` üzerinden. `configure` de aynı: `src/byteorder.c` ve
+  `src/*.c` ile `.depend`.
+- Eski hping meta stub'ları (`BUGS`, `KNOWN-BUGS`, `NEWS`, `TODO`) `docs/`
+  altına alındı; standart meta (`COPYING`, `AUTHORS`, `CHANGES`, `INSTALL`)
+  kökte kaldı.
+- Düz metin `README` kaldırıldı; yerine kapsamlı `README.md` (amaç, özellikler,
+  gereksinimler, kurulum/test, depo düzeni, kullanım örnekleri, scripting/APD,
+  test felsefesi, belge dizini, lisans). Abartılı iddia, sahte rozet/CVE yok;
+  yalnız Linux'ta doğrulanmış durum yansıtılır.
+- `tests/completion.sh` yolu `src/parseoptions.c`'ye güncellendi.
+- `src/gentables.sh` kendi dizinine `cd` eder ve doğru `sbignum-tables.{c,h}`
+  adlarına yazar (eski hâli kökten `tables.c` üretiyordu — hem yer hem ad
+  yanlıştı).
+
+**Doğrulama.** Temiz ağaçtan `make check` 14/14 (GCC ve clang, WERROR),
+`make check-live` 20/20, `make bench`/`make fuzz` derlenir. Kökte izlenen
+hiçbir `.c`/`.h` kalmadı.
+
+**Not.** Tarihsel raporlar (ASAMA1-5) ve eski KK kayıtları kaynak dosyalara
+çıplak adla atıfta bulunur (`getlhs.c` gibi); bunlar zamana-bağlı kayıt
+olduğu için olduğu gibi bırakıldı — README ve güncel yönergeler `src/`
+düzenini yansıtır.
+
+**Geri alma koşulu.** Yok; yalnız dosya düzeni ve belge, çalışma zamanı
+davranışı değişmedi.

@@ -14,7 +14,7 @@ LC_ALL=C; export LC_ALL
 
 here=`dirname "$0"`
 root="$here/.."
-src="$root/parseoptions.c"
+src="$root/src/parseoptions.c"
 bash_c="$root/completion/styxwire.bash"
 zsh_c="$root/completion/styxwire.zsh"
 tmp=`mktemp -d 2>/dev/null` || { echo "SKIP completion.sh: no mktemp"; exit 77; }
