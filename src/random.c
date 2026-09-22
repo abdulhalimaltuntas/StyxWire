@@ -29,7 +29,13 @@ static void hp_rand_init(void)
 	/* Strong sbox initialization */
 	fd = open("/dev/urandom", O_RDONLY);
 	if (fd != -1) {
-		read(fd, rc4_sbox, 256);
+		size_t off = 0;
+		while (off < 256) {
+			ssize_t n = read(fd, rc4_sbox + off, 256 - off);
+			if (n <= 0)
+				break;
+			off += (size_t) n;
+		}
 		close(fd);
 	}
 	/* Weaker sbox initialization */
@@ -81,4 +87,3 @@ u_int32_t hp_rand(void)
 	}
 	return r;
 }
-
